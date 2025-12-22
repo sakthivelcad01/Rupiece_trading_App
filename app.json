@@ -1,29 +1,44 @@
 {
   "expo": {
-    "name": "trade-exec-app",
-    "slug": "trade-exec-app",
+    "name": "Rupiece",
+    "slug": "rupiece",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0C0C0C"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tradeexec.mvp"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0C0C0C"
       },
-      "edgeToEdgeEnabled": true
+      "package": "com.tradeexec.mvp",
+      "edgeToEdgeEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "127aaa33-8a1b-4bfb-86d4-c3a418adba2c"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/127aaa33-8a1b-4bfb-86d4-c3a418adba2c"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }
