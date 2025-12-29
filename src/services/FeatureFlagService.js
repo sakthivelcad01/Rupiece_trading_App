@@ -24,7 +24,8 @@ export const FeatureFlagService = {
                     _phase1Enabled = false;
                 }
             }, (error) => {
-                console.error("[FeatureFlagService] Listener Error:", error);
+                // Silent fail or warn to avoid UI popups on login screen
+                console.warn("[FeatureFlagService] Listener warning:", error.message);
             });
             _isInitialized = true;
         } catch (error) {

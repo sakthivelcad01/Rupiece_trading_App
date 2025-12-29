@@ -139,9 +139,10 @@ export const AuthProvider = ({ children }) => {
                 msg = "Network Error. Please check your internet.";
             }
             setError(msg);
+            setLoading(false); // Fix: Ensure loading is stopped on error
             return false;
         } finally {
-            // Loading state handled by the auth listener / account fetcher
+            // Success case handled by auth listener
         }
     };
 
