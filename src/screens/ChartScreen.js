@@ -45,19 +45,22 @@ const CHART_HTML = `
             layout: { 
                 backgroundColor: theme.background,
                 textColor: theme.text,
-                fontSize: 12,
+                fontSize: 13,
                 fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
             },
             grid: {
-                vertLines: { color: theme.grid },
-                horzLines: { color: theme.grid },
+                vertLines: { color: theme.grid || '#333333', style: LightweightCharts.LineStyle.Dotted },
+                horzLines: { color: theme.grid || '#333333', style: LightweightCharts.LineStyle.Dotted },
             },
             crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
             rightPriceScale: {
+                visible: true,
                 borderColor: theme.borderColor || 'rgba(197, 203, 206, 0.4)',
-                scaleMargins: { top: 0.1, bottom: 0.1 },
+                scaleMargins: { top: 0.2, bottom: 0.2 },
+                alignLabels: true,
             },
             timeScale: {
+                visible: true,
                 borderColor: theme.borderColor || 'rgba(197, 203, 206, 0.4)',
                 timeVisible: true,
                 secondsVisible: false,
@@ -111,8 +114,8 @@ const CHART_HTML = `
                         textColor: theme.text,
                     },
                     grid: {
-                        vertLines: { color: theme.grid },
-                        horzLines: { color: theme.grid },
+                        vertLines: { color: theme.grid || '#333333' },
+                        horzLines: { color: theme.grid || '#333333' },
                     },
                     rightPriceScale: { borderColor: theme.borderColor },
                     timeScale: { borderColor: theme.borderColor }
@@ -182,7 +185,7 @@ export default function ChartScreen({ route, navigation }) {
       const themeData = {
         background: colors.background,
         text: colors.text,
-        grid: 'transparent',
+        grid: isDark ? '#222222' : '#e5e7eb',
         borderColor: isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)'
       };
       setTimeout(() => {

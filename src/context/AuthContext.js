@@ -2,6 +2,7 @@ import React, { createContext, useState, useContext } from 'react';
 import { collection, query, where, getDocs, onSnapshot, or } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../../firebaseConfig';
+import { webSocketService } from '../services/WebSocketService';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -29,9 +30,11 @@ export const AuthProvider = ({ children }) => {
 
     // Fetch Accounts & Restore Selection when User is set
     React.useEffect(() => {
-        if (!user) return;
+        if (!user || !auth.currentUser) return;
 
         let unsub = () => { };
+        let timer = null;
+
         const fetchAccounts = async () => {
             try {
                 // Query: userId == user.uid OR email == user.email
@@ -40,39 +43,42 @@ export const AuthProvider = ({ children }) => {
 
                 const q = query(collection(db, "challenges"), or(...constraints));
 
-                // Real-time listener for accounts
-                unsub = onSnapshot(q, async (snapshot) => {
-                    const userAccounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setAccounts(userAccounts);
+                // Real-time listener for accounts (with brief delay for Auth sync)
+                timer = setTimeout(() => {
+                    unsub = onSnapshot(q, async (snapshot) => {
+                        const userAccounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        console.log(`[AuthContext] Accounts fetched: ${userAccounts.length}. UID: ${user.uid}`);
+                        setAccounts(userAccounts);
 
-                    // Restore Selection
-                    const lastId = await AsyncStorage.getItem(`lastAccount_${user.uid}`);
+                        // Restore Selection
+                        const lastId = await AsyncStorage.getItem(`lastAccount_${user.uid}`);
 
-                    // If we have a currently selected account, update it with live data
-                    // If not, try to restore from storage, or default to first
+                        // If we have a currently selected account, update it with live data
+                        // If not, try to restore from storage, or default to first
 
-                    setSelectedAccount(prev => {
-                        // 1. If we already have a selection, find the updated version of it
-                        if (prev) {
-                            const found = userAccounts.find(a => a.id === prev.id);
-                            return found || userAccounts[0] || null;
-                        }
+                        setSelectedAccount(prev => {
+                            // 1. If we already have a selection, find the updated version of it
+                            if (prev) {
+                                const found = userAccounts.find(a => a.id === prev.id);
+                                return found || userAccounts[0] || null;
+                            }
 
-                        // 2. If no selection (first load), try Storage
-                        if (lastId) {
-                            const found = userAccounts.find(a => a.id === lastId);
-                            if (found) return found;
-                        }
+                            // 2. If no selection (first load), try Storage
+                            if (lastId) {
+                                const found = userAccounts.find(a => a.id === lastId);
+                                if (found) return found;
+                            }
 
-                        // 3. Fallback to first
-                        return userAccounts.length > 0 ? userAccounts[0] : null;
+                            // 3. Fallback to first
+                            return userAccounts.length > 0 ? userAccounts[0] : null;
+                        });
+
+                        setLoading(false);
+                    }, (err) => {
+                        console.error("AuthContext: Error fetching accounts", err);
+                        setLoading(false);
                     });
-
-                    setLoading(false);
-                }, (err) => {
-                    console.error("AuthContext: Error fetching accounts", err);
-                    setLoading(false);
-                });
+                }, 500);
 
             } catch (err) {
                 console.error("AuthContext: Setup Error", err);
@@ -81,7 +87,31 @@ export const AuthProvider = ({ children }) => {
         };
 
         fetchAccounts();
-        return () => unsub();
+        return () => {
+            clearTimeout(timer);
+            unsub();
+        };
+    }, [user]);
+
+    // WebSocket Connection Management (Local Server)
+    React.useEffect(() => {
+        let pingInterval = null;
+        if (user) {
+            console.log("[Auth] User logged in, connecting to Market Data Server...");
+            webSocketService.connect();
+
+            // Setup diagnostic ping
+            pingInterval = setInterval(() => {
+                if (webSocketService.isConnected) {
+                    webSocketService.send({ type: 'ping' });
+                }
+            }, 5000);
+        } else {
+            webSocketService.disconnect();
+        }
+        return () => {
+            if (pingInterval) clearInterval(pingInterval);
+        };
     }, [user]);
 
     const handleSetSelectedAccount = async (account) => {

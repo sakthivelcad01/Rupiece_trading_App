@@ -71,6 +71,29 @@ export default function TradeScreen({ route, navigation }) {
 
     const totalQty = lots * LOT_SIZE;
 
+    // --- REFACTORED TO USE HOOK ---
+    const { useMarketData } = require('../hooks/useMarketData');
+
+    // We only need to monitor one key here
+    const liveData = useMarketData(instrumentKey ? [instrumentKey] : []);
+
+    useEffect(() => {
+        if (instrumentKey && liveData[instrumentKey]) {
+            setQuote(liveData[instrumentKey]);
+        }
+    }, [liveData, instrumentKey]);
+
+    // Initial fetch to ensure we have data instantly before WS connects (optional, but good UX)
+    useEffect(() => {
+        if (instrumentKey) {
+            MarketService.getQuotes([instrumentKey]).then(data => {
+                if (data && data[instrumentKey]) setQuote(data[instrumentKey]);
+            });
+        }
+    }, [instrumentKey]);
+
+    // Removed old Interval Logic
+    /*
     useEffect(() => {
         if (instrumentKey) {
             fetchQuote();
@@ -85,12 +108,23 @@ export default function TradeScreen({ route, navigation }) {
             setQuote(data[instrumentKey]);
         }
     };
+    */
 
     const handlePlaceOrder = async (orderType) => {
         if (!selectedAccount) {
             showAlert("No Account", "Please select a trading account in the Account tab.", [], "warning");
             return;
         }
+
+        // --- TEMPORARY BLOCK: Phase 1 Accounts ---
+        // User Request: "incase the accout phase 1 just show the message of trading is blocked"
+        const isPhase1 = selectedAccount.phase === 'Phase 1' || (selectedAccount.name && selectedAccount.name.includes('Phase 1'));
+        if (isPhase1) {
+            showAlert("Trading Blocked 🚫", "Trading is currently paused for Phase 1 accounts. We will notify you when we are online.", [], "warning");
+            return;
+        }
+        // -----------------------------------------
+
         if (!quote) return;
 
         setPlacingOrder(true);
@@ -296,7 +330,8 @@ export default function TradeScreen({ route, navigation }) {
                     </View>
 
 
-                    {/* Order Type Selector */}
+                    {/* Order Type Selector - HIDDEN/REMOVED (Only MARKET allowed) */}
+                    {/* 
                     <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Order Type</Text>
                     <View style={styles.segmentContainer}>
                         <TouchableOpacity
@@ -312,21 +347,9 @@ export default function TradeScreen({ route, navigation }) {
                             <Text style={[styles.segmentText, orderClass === 'LIMIT' && { color: '#fff' }]}>LIMIT</Text>
                         </TouchableOpacity>
                     </View>
+                    */}
 
-                    {/* Limit Price Input */}
-                    {orderClass === 'LIMIT' && (
-                        <View style={{ marginTop: 12 }}>
-                            <Text style={styles.sectionLabel}>Limit Price (₹)</Text>
-                            <TextInput
-                                style={styles.input}
-                                placeholder={price.toFixed(2)}
-                                placeholderTextColor={colors.subText}
-                                keyboardType="numeric"
-                                value={limitPrice}
-                                onChangeText={setLimitPrice}
-                            />
-                        </View>
-                    )}
+                    {/* Limit Price Input - REMOVED */}
 
                     {/* SL / TP Inputs */}
                     <View style={{ flexDirection: 'row', gap: 12, marginTop: 12 }}>
@@ -358,8 +381,8 @@ export default function TradeScreen({ route, navigation }) {
                     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
                         <Text style={styles.marginText}>
                             ₹{type === 'FUT'
-                                ? (((orderClass === 'LIMIT' && parseFloat(limitPrice) ? parseFloat(limitPrice) : price) * totalQty) / 10).toFixed(2)
-                                : ((orderClass === 'LIMIT' && parseFloat(limitPrice) ? parseFloat(limitPrice) : price) * totalQty).toFixed(2)
+                                ? ((price * totalQty) / 10).toFixed(2)
+                                : (price * totalQty).toFixed(2)
                             }
                         </Text>
                         {type === 'FUT' && (

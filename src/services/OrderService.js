@@ -13,6 +13,7 @@ import {
     deleteDoc
 } from 'firebase/firestore';
 import { MarketService } from './MarketService';
+import { FeatureFlagService } from './FeatureFlagService';
 
 export const OrderService = {
 
@@ -44,6 +45,16 @@ export const OrderService = {
             // if (!OrderService.isMarketOpen()) {
             //      throw "Market is Closed. Trading hours are 09:15 AM to 03:30 PM.";
             // }
+
+            // RESTRICTION: Only Allow Competition Accounts UNLESS Feature Flag is ON
+            const isPhase1 = !account.isCompetition && account.phase !== 'Competition';
+            if (isPhase1) {
+                // Double check with async fetch to be sure
+                const allowed = await FeatureFlagService.checkPhase1EnabledAsync();
+                if (!allowed) {
+                    throw "Phase 1 trading is coming soon. Please use a Competition account.";
+                }
+            }
 
             const {
                 instrumentKey,
@@ -97,6 +108,10 @@ export const OrderService = {
                 const currentBalance = accountDoc.data().currentBalance || 0;
                 const initialBalance = accountDoc.data().balance || 0;
                 const investedAmount = accountDoc.data().investedAmount || 0;
+
+                // Load Stats
+                let winCount = accountDoc.data().winCount || 0;
+                let lossCount = accountDoc.data().lossCount || 0;
 
                 const currentEquity = currentBalance + investedAmount;
 
@@ -152,11 +167,17 @@ export const OrderService = {
                 // 100% - 6.5% = 93.5% (Factor 0.935)
                 const marginCallLevel = accountSize * 0.935;
 
+                // FIX: User reported they cannot recover if blocked here.
+                // We will change this to ONLY warn/notify, but NOT block new orders server-side
+                // unless they hit the actual Max Loss (8%) or have insufficient funds.
+
+                /* 
                 if (status === 'ongoing' && currentEquity < marginCallLevel) {
                     if (type === 'BUY') {
                         throw "🚨 Margin Call (6.5% Loss)! New orders blocked. Please reduce positions.";
                     }
                 }
+                */
 
                 let newBalance = currentBalance;
                 let newInvestedAmount = investedAmount;
@@ -216,6 +237,13 @@ export const OrderService = {
 
                         // Calculate Realized PnL for THIS chunk
                         const realizedPnL = (price - pos.avgPrice) * qty;
+
+                        // Update Logic for Win/Loss Count
+                        if (realizedPnL > 0) {
+                            winCount++;
+                        } else {
+                            lossCount++;
+                        }
 
                         // Update Balance on Sell:
                         newBalance = currentBalance + costOfSold + realizedPnL;
@@ -289,7 +317,9 @@ export const OrderService = {
                     currentBalance: newBalance,
                     investedAmount: newInvestedAmount,
                     currentProfit: totalPnL > 0 ? totalPnL : 0,
-                    currentLoss: totalPnL < 0 ? Math.abs(totalPnL) : 0
+                    currentLoss: totalPnL < 0 ? Math.abs(totalPnL) : 0,
+                    winCount: winCount,
+                    lossCount: lossCount
                 });
 
                 if (orderClass === 'LIMIT') {
@@ -308,6 +338,7 @@ export const OrderService = {
                         orderClass: 'LIMIT',
                         sl: sl || null,
                         tp: tp || null,
+                        lotSize: orderDetails.lotSize || 1, // Persist Lot Size
                         timestamp: serverTimestamp()
                     });
 
@@ -593,74 +624,283 @@ export const OrderService = {
 
                 const currentBalance = accountDoc.data().currentBalance || 0;
                 const investedAmount = accountDoc.data().investedAmount || 0;
+                const initialBalance = accountDoc.data().balance || 0;
+                let winCount = accountDoc.data().winCount || 0;
+                let lossCount = accountDoc.data().lossCount || 0;
 
-                // Determine Refund (if any)
-                // Limit Price: 100 // We deducted 100 from Balance.
-                // Fill Price: 90 // Actual Cost 90.
-                // Refund: 10.
-                // New Invested must be reduced by 10 (Cost basis adjustment).
+                // Prepare Updates
+                let newBalance = currentBalance;
+                let newInvestedAmount = investedAmount;
+                let positionAction = 'NONE';
+                let newPosData = {};
+                let closedTradeData = null;
 
-                // Diff
-                const expectedCost = order.price * order.qty;
-                const actualCost = fillPrice * order.qty;
-                const refund = expectedCost - actualCost;
+                if (order.type === 'BUY') {
+                    // BUY LOGIC (Refund Excess Margin)
 
-                const newBalance = currentBalance + refund;
-                const newInvestedAmount = investedAmount - refund;
+                    // Diff: We blocked (LimitPrice * Qty). Actual is (FillPrice * Qty).
+                    // If Fill < Limit, we give back money.
+                    const expectedCost = order.price * order.qty;
+                    const actualCost = fillPrice * order.qty;
+                    const refund = expectedCost - actualCost;
+
+                    newBalance = currentBalance + refund;
+                    // Invested Amount check: 
+                    // When Limit BUY was placed, we likely didn't add to InvestedAmount yet?
+                    // actually placeOrder adds to InvestedAmount? -> No, for LIMIT it deducts from Balance but where does it go?
+                    // Let's check placeOrder... 
+                    // Actually placeOrder for LIMIT just blocks balance (Balance - Cost). It DOES NOT add to Invested.
+                    // So we must ADD to Invested now.
+
+                    // Wait, current logic in executeLimitOrder was:
+                    // newInvestedAmount = investedAmount - refund; 
+                    // This implies investedAmount WAS updated. But checking placeOrder...
+                    // "transaction.update(accountRef, { currentBalance: newBalance - effectiveCost, investedAmount: investedAmount + effectiveCost })" ??
+                    // NO. placeOrder for LIMIT: `transaction.set(orderRef, ...)` 
+                    // It does NOT update account balance in placeOrder for LIMIT? 
+                    // Ah, I need to check placeOrder again. 
+                    // lines 301+ in placeOrder: It JUST sets orderRef. It does NOT update account!
+                    // Wait, if placeOrder doesn't deduct balance, then we have a problem.
+                    // ... Checking previous file content ...
+                    // There is NO account update in `placeOrder` for LIMIT orders in the snippet I saw?
+                    // Wait. `placeOrder` calls `runTransaction`. 
+                    // Line 73: const accountRef...
+                    // Line 76: runTransaction...
+
+                    // ... inside transaction ...
+                    // Line 170: if (type === 'BUY') { newBalance = currentBalance - effectiveCost; ... }
+                    // Line 294: transaction.update(accountRef, ... newBalance ... )
+
+                    // YES, it DOES update balance and investedAmount for ALL BUY orders regardless of class?
+                    // Line 69: effectivePrice = (orderClass === 'LIMIT'...)
+                    // So for Limit Buy, it Deducts Cash and ADDS to InvestedAmount IMMEDIATELY at placement.
+
+                    // SO: Refund Logic is correct.
+                    // We moved X to Invested. We only needed Y.
+                    // Refund = X - Y.
+                    // Cash += Refund.
+                    // Invested -= Refund.
+
+                    newInvestedAmount = investedAmount - refund;
+
+                    // Position Logic (Add/Create)
+                    if (positionDoc.exists() && positionDoc.data().status === 'OPEN') {
+                        const pos = positionDoc.data();
+                        let newQty = pos.qty + order.qty;
+                        let totalCost = (pos.avgPrice * pos.qty) + actualCost;
+                        let newAvg = totalCost / newQty;
+
+                        positionAction = 'UPDATE';
+                        newPosData = {
+                            qty: newQty,
+                            avgPrice: newAvg,
+                            lastUpdated: serverTimestamp()
+                        };
+                    } else {
+                        positionAction = 'CREATE';
+                        newPosData = {
+                            userId: order.userId,
+                            accountId: account.id,
+                            instrumentKey: order.instrumentKey,
+                            symbol: order.symbol,
+                            qty: order.qty,
+                            avgPrice: fillPrice,
+                            status: 'OPEN',
+                            product: order.product || 'PAPER',
+                            sl: order.sl || null,
+                            tp: order.tp || null,
+                            timestamp: serverTimestamp()
+                        };
+                    }
+
+                } else {
+                    // SELL LOGIC (Close/Reduce)
+
+                    if (!positionDoc.exists() || positionDoc.data().status !== 'OPEN') {
+                        throw "Cannot execute SELL: No Open Position found";
+                    }
+                    const pos = positionDoc.data();
+
+                    // Check Qty
+                    if (pos.qty < order.qty) {
+                        // This is tricky. Limit Sell might have been valid when placed, but Position reduced meanwhile?
+                        // For now, fail or partial? Let's fail safety.
+                        throw "Insufficient Position Quantity";
+                    }
+
+                    // Calculation
+                    let costOfSold = pos.avgPrice * order.qty;
+                    if (pos.product === 'FUTURES') {
+                        costOfSold = costOfSold / 10;
+                    }
+
+                    const realizedPnL = (fillPrice - pos.avgPrice) * order.qty;
+
+                    newBalance = currentBalance + costOfSold + realizedPnL;
+                    newInvestedAmount = investedAmount - costOfSold;
+                    if (newInvestedAmount < 0) newInvestedAmount = 0;
+
+                    // Stats Update
+                    if (realizedPnL > 0) winCount++;
+                    else lossCount++;
+
+                    // Trade Record
+                    closedTradeData = {
+                        accountId: account.id,
+                        avgPrice: pos.avgPrice,
+                        closedAt: serverTimestamp(),
+                        expiry: pos.expiry || '',
+                        id: new Date().toISOString(),
+                        instrument: order.symbol.split(' ')[0] || "INDEX",
+                        optionType: pos.optionType || '',
+                        pnl: realizedPnL,
+                        price: fillPrice,
+                        quantity: order.qty,
+                        strike: pos.strike || '',
+                        type: "BUY", // Orig
+                        action: "SELL",
+                        userId: order.userId
+                    };
+
+                    let newQty = pos.qty - order.qty;
+                    if (newQty === 0) {
+                        positionAction = 'CLOSE';
+                        newPosData = {
+                            qty: 0,
+                            status: 'CLOSED',
+                            sellPrice: fillPrice,
+                            lastUpdated: serverTimestamp()
+                        };
+                    } else {
+                        positionAction = 'UPDATE';
+                        newPosData = {
+                            qty: newQty,
+                            lastUpdated: serverTimestamp()
+                        };
+                    }
+                }
 
                 // 2. WRITE OPERATIONS
 
                 // Update Account
-                if (refund !== 0) {
-                    transaction.update(accountRef, {
-                        currentBalance: newBalance,
-                        investedAmount: newInvestedAmount
-                    });
-                }
+                const currentEquity = newBalance + newInvestedAmount;
+                const totalPnL = currentEquity - initialBalance;
+
+                transaction.update(accountRef, {
+                    currentBalance: newBalance,
+                    investedAmount: newInvestedAmount,
+                    currentProfit: totalPnL > 0 ? totalPnL : 0,
+                    currentLoss: totalPnL < 0 ? Math.abs(totalPnL) : 0,
+                    winCount: winCount,
+                    lossCount: lossCount
+                });
 
                 // Update Order Status
                 transaction.update(orderRef, {
                     status: 'EXECUTED',
-                    price: fillPrice, // Update to actual fill price
+                    price: fillPrice,
                     executionTime: serverTimestamp()
                 });
 
-                // Create Position
-                let newPosData = {};
-                if (positionDoc.exists() && positionDoc.data().status === 'OPEN') {
-                    const pos = positionDoc.data();
-                    let newQty = pos.qty + order.qty;
-                    // Improved Average
-                    let totalCost = (pos.avgPrice * pos.qty) + actualCost;
-                    let newAvg = totalCost / newQty;
-
-                    newPosData = {
-                        qty: newQty,
-                        avgPrice: newAvg,
-                        lastUpdated: serverTimestamp()
-                    };
-                    transaction.update(positionRef, newPosData);
-                } else {
-                    newPosData = {
-                        userId: order.userId,
-                        accountId: account.id,
-                        instrumentKey: order.instrumentKey,
-                        symbol: order.symbol,
-                        qty: order.qty,
-                        avgPrice: fillPrice,
-                        status: 'OPEN',
-                        product: order.product || 'PAPER',
-                        sl: order.sl || null,
-                        tp: order.tp || null,
-                        timestamp: serverTimestamp()
-                    };
+                // Update Position
+                if (positionAction === 'CREATE') {
                     transaction.set(positionRef, newPosData);
+                } else if (positionAction === 'UPDATE' || positionAction === 'CLOSE') {
+                    transaction.update(positionRef, newPosData);
+                }
+
+                // Create Trade Doc
+                if (closedTradeData) {
+                    const tradeRef = doc(collection(db, "trades"));
+                    transaction.set(tradeRef, closedTradeData);
                 }
             });
             return { success: true };
         } catch (error) {
             console.error("Exec Limit Error:", error);
             return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * Modifies a Pending Limit Order.
+     * @param {string} orderId 
+     * @param {number} newPrice 
+     * @param {number} newQty 
+     * @param {Object} account 
+     */
+    modifyPendingOrder: async (orderId, newPrice, newQty, account) => {
+        const orderRef = doc(db, "orders", orderId);
+        const accountRef = doc(db, "challenges", account.id);
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                // 1. Read Order
+                const orderDoc = await transaction.get(orderRef);
+                if (!orderDoc.exists()) throw "Order not found";
+                const order = orderDoc.data();
+
+                if (order.status !== 'PENDING') throw "Order is not Pending";
+
+                // 2. Read Account to adjust margin
+                const accountDoc = await transaction.get(accountRef);
+                const currentBalance = accountDoc.data().currentBalance || 0;
+                const investedAmount = accountDoc.data().investedAmount || 0;
+
+                // 3. Calculate Diff
+                const oldCost = order.price * order.qty;
+                const newCost = newPrice * newQty;
+                const diff = newCost - oldCost; // Positive means we need MORE money
+
+                // 4. Update Balance
+                if (currentBalance < diff) throw "Insufficient Funds for modification";
+
+                transaction.update(accountRef, {
+                    currentBalance: currentBalance - diff,
+                    investedAmount: investedAmount + diff
+                });
+
+                // 5. Update Order
+                transaction.update(orderRef, {
+                    price: newPrice,
+                    qty: newQty,
+                    lastModified: serverTimestamp()
+                });
+            });
+            return { success: true };
+        } catch (error) {
+            console.error("Modify Order Error:", error);
+            return { success: false, error: error.message || error };
+        }
+    },
+
+    /**
+     * Updates SL/TP for an Open Position.
+     * @param {Object} account 
+     * @param {string} positionId 
+     * @param {number|null} sl 
+     * @param {number|null} tp 
+     */
+    updatePositionSLTP: async (account, positionId, sl, tp) => {
+        const positionRef = doc(db, "positions", positionId);
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const posDoc = await transaction.get(positionRef);
+                if (!posDoc.exists()) throw "Position not found";
+
+                if (posDoc.data().status !== 'OPEN') throw "Position is not OPEN";
+
+                transaction.update(positionRef, {
+                    sl: sl || null,
+                    tp: tp || null,
+                    lastUpdated: serverTimestamp()
+                });
+            });
+            return { success: true };
+        } catch (error) {
+            console.error("Update SL/TP Error:", error);
+            return { success: false, error: error.message || error };
         }
     },
 
@@ -864,5 +1104,5 @@ export const OrderService = {
         } catch (error) {
             console.error("[LimitTrigger] Error checking pending orders:", error);
         }
-    }
+    },
 };

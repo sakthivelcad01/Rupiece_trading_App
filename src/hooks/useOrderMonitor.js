@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { OrderService } from '../services/OrderService';
 import { MarketService } from '../services/MarketService';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { db, auth } from '../../firebaseConfig';
 
 export function useOrderMonitor() {
     const { user, selectedAccount } = useAuth();
@@ -21,12 +21,25 @@ export function useOrderMonitor() {
             where("status", "==", "PENDING")
         );
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setPendingOrders(orders);
-        });
+        let unsub = null;
+        const timer = setTimeout(() => {
+            if (!auth.currentUser) {
+                console.log("[useOrderMonitor] Postponing Orders Listener: auth.currentUser is null");
+                return;
+            }
+            console.log(`[useOrderMonitor] Starting Orders Listener. UID: ${auth.currentUser.uid}, Selected: ${selectedAccount.id}`);
+            unsub = onSnapshot(q, (snapshot) => {
+                const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setPendingOrders(orders);
+            }, (err) => {
+                console.error("[useOrderMonitor] Orders Snapshot Error:", err);
+            });
+        }, 1000); // Increased delay for stability
 
-        return () => unsubscribe();
+        return () => {
+            clearTimeout(timer);
+            if (unsub) unsub();
+        };
     }, [user, selectedAccount]);
 
     // 2. Subscribe to Open Positions (for SL/TP)
@@ -39,47 +52,62 @@ export function useOrderMonitor() {
             where("status", "==", "OPEN")
         );
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const positions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setOpenPositions(positions);
-        });
+        let unsub = null;
+        const timer = setTimeout(() => {
+            if (!auth.currentUser) {
+                console.log("[useOrderMonitor] Postponing Positions Listener: auth.currentUser is null");
+                return;
+            }
+            console.log(`[useOrderMonitor] Starting Positions Listener. UID: ${auth.currentUser.uid}`);
+            unsub = onSnapshot(q, (snapshot) => {
+                const positions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setOpenPositions(positions);
+            }, (err) => {
+                console.error("[useOrderMonitor] Positions Snapshot Error:", err);
+            });
+        }, 1000);
 
-        return () => unsubscribe();
+        return () => {
+            clearTimeout(timer);
+            if (unsub) unsub();
+        };
     }, [user, selectedAccount]);
 
-    // 3. Polling Logic
+    // --- REFACTORED TO USE HOOK ---
+    const { useMarketData } = require('./useMarketData');
+
+    // Dynamically calculate keys to monitor
+    const [monitorKeys, setMonitorKeys] = useState([]);
+
     useEffect(() => {
-        if (!user || !selectedAccount) return;
-        if (pendingOrders.length === 0 && openPositions.length === 0) return;
+        const keys = new Set();
+        pendingOrders.forEach(o => keys.add(o.instrumentKey));
+        openPositions.forEach(p => keys.add(p.instrumentKey));
+        setMonitorKeys(Array.from(keys));
+    }, [pendingOrders, openPositions]);
 
-        const checkMarket = async () => {
-            if (isProcessing) return;
+    // Subscribe to real-time data
+    const liveData = useMarketData(monitorKeys);
+
+    // Trigger Logic whenever liveData updates
+    useEffect(() => {
+        if (monitorKeys.length === 0) return;
+        if (isProcessing) return; // Prevent re-entry
+
+        const checkTriggers = async () => {
             setIsProcessing(true);
-
             try {
-                // Gather Unique Keys
-                const keys = new Set();
-                pendingOrders.forEach(o => keys.add(o.instrumentKey));
-                openPositions.forEach(p => keys.add(p.instrumentKey));
-
-                if (keys.size === 0) return;
-
-                const quotes = await MarketService.getQuotes(Array.from(keys));
-
-                // A. Check Pending Orders (Limit)
+                // A. Check Pending Orders
                 for (const order of pendingOrders) {
-                    const quote = quotes[order.instrumentKey];
+                    const quote = liveData[order.instrumentKey];
                     if (!quote) continue;
 
                     const lastPrice = quote.last_price;
-                    // Limit Order Logic
                     let shouldExecute = false;
 
                     if (order.type === 'BUY') {
-                        // Buy Limit: Price drops to or below Limit
                         if (lastPrice <= order.price) shouldExecute = true;
                     } else if (order.type === 'SELL') {
-                        // Sell Limit: Price rises to or above Limit
                         if (lastPrice >= order.price) shouldExecute = true;
                     }
 
@@ -91,28 +119,16 @@ export function useOrderMonitor() {
 
                 // B. Check Open Positions (SL/TP)
                 for (const pos of openPositions) {
-                    const quote = quotes[pos.instrumentKey];
+                    const quote = liveData[pos.instrumentKey];
                     if (!quote) continue;
 
                     const lastPrice = quote.last_price;
                     let triggerExit = false;
                     let exitReason = "";
 
-                    if (pos.qty > 0) { // LONG POSITION
-                        // Stop Loss (Sell if Price <= SL)
-                        if (pos.sl && lastPrice <= pos.sl) {
-                            triggerExit = true;
-                            exitReason = "SL Hit";
-                        }
-                        // Take Profit (Sell if Price >= TP)
-                        if (pos.tp && lastPrice >= pos.tp) {
-                            triggerExit = true;
-                            exitReason = "TP Hit";
-                        }
-                    } else {
-                        // SHORT POSITION (If implemented in future)
-                        // SL: Buy if Price >= SL
-                        // TP: Buy if Price <= TP
+                    if (pos.qty > 0) { // LONG
+                        if (pos.sl && lastPrice <= pos.sl) { triggerExit = true; exitReason = "SL Hit"; }
+                        if (pos.tp && lastPrice >= pos.tp) { triggerExit = true; exitReason = "TP Hit"; }
                     }
 
                     if (triggerExit) {
@@ -121,21 +137,22 @@ export function useOrderMonitor() {
                     }
                 }
 
-            } catch (err) {
-                console.error("[Monitor] Error checking market:", err);
-            } finally {
-                setIsProcessing(false);
-            }
+            } catch (e) { console.error(e); }
+            finally { setIsProcessing(false); }
         };
 
-        const intervalId = setInterval(checkMarket, 3000); // Check every 3 seconds
-        return () => clearInterval(intervalId);
+        checkTriggers();
 
-    }, [pendingOrders, openPositions, user, selectedAccount]);
+    }, [liveData]); // Trigger on data update
+
+    /* REMOVED POLLING LOGIC 
+    // 3. Polling Logic
+    useEffect(() => { ... }, [...]); 
+    */
 
     // 4. Auto Square-off Logic (Intraday at 3:30 PM)
     useEffect(() => {
-        if (!user || !selectedAccount) return;
+        if (!user || !auth.currentUser || !selectedAccount) return;
 
         const checkAutoSquareOff = async () => {
             const now = new Date();
@@ -180,4 +197,36 @@ export function useOrderMonitor() {
         return () => clearInterval(timer);
 
     }, [openPositions, user, selectedAccount]);
+
+    // 5. MAX LOSS AUTO-CLOSE (Emergency Risk Management)
+    useEffect(() => {
+        if (!user || !selectedAccount) return;
+
+        if (selectedAccount.status === 'failed' && openPositions.length > 0) {
+
+            const closeAllPositions = async () => {
+                console.warn("[Emergency Close] Account FAILED (Max Loss Hit). Closing ALL positions.");
+
+                try {
+                    // Fetch latest prices for accurate close
+                    const keys = openPositions.map(p => p.instrumentKey);
+                    const quotes = await MarketService.getQuotes(keys);
+
+                    for (const pos of openPositions) {
+                        const quote = quotes[pos.instrumentKey];
+                        const price = quote ? quote.last_price : pos.avgPrice;
+
+                        console.log(`[Emergency Close] Closing ${pos.symbol} @ ${price}`);
+                        await OrderService.closePosition(pos, price, selectedAccount, user.uid);
+                    }
+                } catch (err) {
+                    console.error("[Emergency Close] Failed:", err);
+                }
+            };
+
+            // Trigger immediately
+            closeAllPositions();
+        }
+
+    }, [selectedAccount, openPositions, user]);
 }

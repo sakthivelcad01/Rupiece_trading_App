@@ -1,10 +1,11 @@
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { db, auth } from '../../firebaseConfig';
 
 const BASE_URL = 'https://api.upstox.com/v2';
 
 const getAccessToken = async () => {
     try {
+        if (!auth.currentUser) return null;
         const docRef = doc(db, "config", "upstox");
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
@@ -13,7 +14,7 @@ const getAccessToken = async () => {
         console.warn("Upstox Config not found in Firestore");
         return null;
     } catch (error) {
-        console.error("Error fetching access token:", error);
+        console.error("UpstoxService: Error fetching access token:", error);
         return null;
     }
 };

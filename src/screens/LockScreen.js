@@ -6,6 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Delete, Fingerprint, Lock } from 'lucide-react-native';
 import { useAlert } from '../context/AlertContext';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 const PIN_KEY = 'user_app_pin';
 
 export default function LockScreen({ onUnlock, onLogout }) {
@@ -16,46 +18,59 @@ export default function LockScreen({ onUnlock, onLogout }) {
     const { showAlert } = useAlert();
 
     useEffect(() => {
-        checkPinStatus();
-        checkBiometrics();
+        init();
     }, []);
 
-    const checkPinStatus = async () => {
+    const init = async () => {
         try {
+            // 1. Check Biometric Support & User Preference FIRST
+            const hasHardware = await LocalAuthentication.hasHardwareAsync();
+            const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+            const enabledPref = await AsyncStorage.getItem('biometrics_enabled');
+            const isEnabled = enabledPref === 'true';
+
+            const canUseBiometrics = hasHardware && isEnrolled && isEnabled;
+            setBiometricAvailable(canUseBiometrics);
+
+            // 2. Check PIN Status
             const savedPin = await SecureStore.getItemAsync(PIN_KEY);
+
             if (savedPin) {
                 setStatus('UNLOCK');
-                // Prompt biometrics immediately if available
-                authenticateBiometric();
+                // Only prompt if we confirmed it's valid and enabled
+                if (canUseBiometrics) {
+                    // Small delay to ensure UI is ready
+                    setTimeout(() => attemptBiometricAuth(), 100);
+                }
             } else {
                 setStatus('SETUP');
             }
         } catch (e) {
-            console.error("Error checking PIN", e);
-            setStatus('SETUP'); // Fallback
+            console.error("LockScreen Init Error:", e);
+            setStatus('SETUP'); // Fallback to setup if storage fails
         }
     };
 
-    const checkBiometrics = async () => {
-        const hasHardware = await LocalAuthentication.hasHardwareAsync();
-        const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    const attemptBiometricAuth = async () => {
+        try {
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Unlock App',
+                fallbackLabel: 'Use PIN',
+                disableDeviceFallback: true, // Force our PIN UI if fails
+                cancelLabel: 'Cancel'
+            });
 
-        // Check user preference
-        const enabledPref = await import('@react-native-async-storage/async-storage').then(mod => mod.default.getItem('biometrics_enabled'));
-        const isEnabled = enabledPref === 'true';
-
-        setBiometricAvailable(hasHardware && isEnrolled && isEnabled);
+            if (result.success) {
+                onUnlock();
+            }
+        } catch (err) {
+            console.log("Biometric Auth Failed/Cancelled:", err);
+        }
     };
 
-    const authenticateBiometric = async () => {
-        const result = await LocalAuthentication.authenticateAsync({
-            promptMessage: 'Unlock App',
-            fallbackLabel: 'Use PIN',
-        });
-
-        if (result.success) {
-            onUnlock();
-        }
+    // Kept for manual button press
+    const authenticateBiometric = () => {
+        attemptBiometricAuth();
     };
 
     const handlePress = (num) => {

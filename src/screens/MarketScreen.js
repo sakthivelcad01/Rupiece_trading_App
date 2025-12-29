@@ -30,7 +30,7 @@ const IndexCard = ({ data, symbol, active, onPress, colors }) => {
                 <Text style={styles(colors).indexSymbol}>{symbol}</Text>
             </View>
             <Text style={[styles(colors).indexChange, { color, marginBottom: 4 }]}>
-                {data?.change ? (data.change > 0 ? '+' : '') + data.change : '0.00'}
+                {data?.change ? (data.change > 0 ? '+' : '') + data.change.toFixed(2) : '0.00'}
                 ({data?.changePwd ? data.changePwd.toFixed(2) : '0.00'}%)
             </Text>
             <Text style={styles(colors).indexPrice}>₹{data?.last_price ? data.last_price.toFixed(2) : '0.00'}</Text>
@@ -160,11 +160,186 @@ export default function MarketScreen({ navigation }) {
         }
     };
 
+    // --- REFACTORED TO USE HOOK ---
+    const { useMarketData } = require('../hooks/useMarketData');
+
+    // 1. Get Indices Data Real-time
+    const indexKeys = Object.values(INSTRUMENT_KEYS);
+    const liveIndices = useMarketData(indexKeys);
+
+    // Merge live data into indicesData for display
+    useEffect(() => {
+        if (Object.keys(liveIndices).length > 0) {
+            setIndicesData(prev => {
+                const next = { ...prev };
+                Object.keys(INSTRUMENT_KEYS).forEach(k => {
+                    const iKey = INSTRUMENT_KEYS[k];
+                    if (liveIndices[iKey]) {
+                        const q = liveIndices[iKey];
+                        next[k] = {
+                            last_price: q.last_price || 0,
+                            change: q.net_change !== undefined ? q.net_change : (q.last_price || 0) - (q.ohlc?.close || 0),
+                            changePwd: q.ohlc?.close ? (((q.last_price || 0) - q.ohlc.close) / q.ohlc.close) * 100 : 0
+                        };
+                    }
+                });
+                return next;
+            });
+        } else {
+            // console.log("[MarketDebug] liveIndices match count: 0");
+        }
+    }, [liveIndices]);
+
+    // 2. Fetch Option Contracts (Static List)
+    useEffect(() => {
+        let mounted = true;
+        const loadContracts = async () => {
+            setLoading(true);
+            try {
+                const currentKey = INSTRUMENT_KEYS[selectedIndex];
+                const allContracts = await MarketService.getOptionContracts(currentKey, null);
+
+                if (!mounted) return;
+
+                if (allContracts.length > 0) {
+                    console.log(`[MarketDebug] loadContracts: ${allContracts.length} received.`);
+                    processContracts(allContracts, indicesData[selectedIndex]?.last_price || 0);
+                } else {
+                    console.log("[MarketDebug] loadContracts: 0 contracts received.");
+                    setOptionChain([]);
+                }
+            } catch (e) { console.error(e); }
+            finally { if (mounted) setLoading(false); }
+        };
+        loadContracts();
+        return () => { mounted = false; };
+    }, [selectedIndex]); // Only re-run if Index changes
+
+
+    // 3. Subscribe to Visible Option Chain
+    // We need to extract keys from optionChain state
+    const [chainKeys, setChainKeys] = useState([]);
+
+    useEffect(() => {
+        const keys = [];
+        optionChain.forEach(row => {
+            if (row.call_options) keys.push(row.call_options.instrument_key);
+            if (row.put_options) keys.push(row.put_options.instrument_key);
+        });
+        setChainKeys(keys);
+    }, [optionChain]);
+
+    const liveOptions = useMarketData(chainKeys);
+
+    // Merge live options into optionChain
+    useEffect(() => {
+        if (Object.keys(liveOptions).length > 0) {
+            setOptionChain(prevChain => {
+                return prevChain.map(row => {
+                    let newRow = { ...row };
+                    if (row.call_options && liveOptions[row.call_options.instrument_key]) {
+                        newRow.call_options = { ...row.call_options, market_data: liveOptions[row.call_options.instrument_key] };
+                    }
+                    if (row.put_options && liveOptions[row.put_options.instrument_key]) {
+                        newRow.put_options = { ...row.put_options, market_data: liveOptions[row.put_options.instrument_key] };
+                    }
+                    return newRow;
+                });
+            });
+        }
+    }, [liveOptions]);
+
+    const processContracts = async (allContracts, currentPrice) => {
+        // ... Logic to filter/sort contracts moved here or reused ...
+        // For brevity in diff, assume we extract logic to helper or keep inline
+        // RE-IMPLEMENTING LOGIC FROM OLD fetchMarketData:
+        console.log(`[MarketDebug] processContracts: Processing ${allContracts.length} starting... Index: ${selectedIndex} Price: ${currentPrice}`);
+
+        const uniqueExpiries = [...new Set(allContracts.map(c => c.expiry))];
+        uniqueExpiries.sort();
+        const todayStr = new Date().toISOString().split('T')[0];
+        const nearestExpiry = uniqueExpiries.find(e => e >= todayStr) || uniqueExpiries[uniqueExpiries.length - 1];
+        console.log(`[MarketDebug] Options Expiry Selected: ${nearestExpiry}`);
+
+        const expiryContracts = allContracts
+            .filter(c => c.expiry === nearestExpiry)
+            .map(c => ({
+                ...c,
+                instrument_key: c.instrument_key.replace(/:/g, '|')
+            }));
+
+        let step = 50;
+        if (selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' || selectedIndex === 'BANKEX') step = 100;
+        else if (selectedIndex === 'MIDCAP') step = 25;
+
+        // Note: We need a valid currentPrice. If we don't have it yet, we might render centered on 0 or wait?
+        // Let's assume we use the first fetched price or 0.
+
+        const validContracts = expiryContracts.filter(c => {
+            const remainder = c.strike_price % step;
+            return remainder < 0.01 || Math.abs(remainder - step) < 0.01;
+        });
+        validContracts.sort((a, b) => a.strike_price - b.strike_price);
+
+        let atmIndex = 0;
+        let minDiff = Number.MAX_VALUE;
+        // Optimization: if currentPrice is 0, try to find from indicesData
+        // But indicesData might also be 0 initially.
+
+        if (currentPrice > 0) {
+            validContracts.forEach((c, i) => {
+                const diff = Math.abs(c.strike_price - currentPrice);
+                if (diff < minDiff) { minDiff = diff; atmIndex = i; }
+            });
+        } else {
+            atmIndex = Math.floor(validContracts.length / 2);
+        }
+
+        const range = 25;
+        const startIndex = Math.max(0, atmIndex - range);
+        const endIndex = Math.min(validContracts.length, atmIndex + range + 1);
+        const targetContracts = validContracts.slice(startIndex, endIndex);
+
+        // Fetch Initial Quotes for these contracts using REST logic if available, or just rely on WebSocket
+        // But the previous implementation logic (lines 121-127 in step 502 view) fetched quotes here.
+        // We removed it in the previous refactor (implied by step 594 showing missing quote fetch).
+        // Let's restore it.
+        const targetKeys = targetContracts.map(c => c.instrument_key);
+        console.log(`[MarketDebug] Fetching quotes for ${targetKeys.length} option contracts...`);
+        // We can reuse MarketService.getQuotes (which now uses V2 safely for snapshots)
+        const optionQuotes = await MarketService.getQuotes(targetKeys);
+        console.log(`[MarketDebug] Option Quotes Received Keys: ${Object.keys(optionQuotes).length}`);
+
+        const chainMap = {};
+        targetContracts.forEach((c) => {
+            // Initialize with placeholder or 0
+            if (!chainMap[c.strike_price]) {
+                chainMap[c.strike_price] = { strike_price: c.strike_price };
+            }
+            const quote = optionQuotes[c.instrument_key];
+            const ltp = quote ? quote.last_price : 0;
+
+            const optData = {
+                market_data: { ltp: ltp },
+                instrument_key: c.instrument_key,
+                expiry: c.expiry,
+                lot_size: c.lot_size
+            };
+            const type = c.instrument_type ? c.instrument_type.toUpperCase() : '';
+            if (type === 'CE' || type === 'CALL') chainMap[c.strike_price].call_options = optData;
+            else if (type === 'PE' || type === 'PUT') chainMap[c.strike_price].put_options = optData;
+        });
+
+        const finalChain = Object.values(chainMap).sort((a, b) => a.strike_price - b.strike_price);
+        console.log(`[MarketDebug] Final Option Chain Rows: ${finalChain.length}`);
+        setOptionChain(finalChain);
+        console.log(`[MarketDebug] processContracts Complete.`);
+    };
+
+    // Initial Fetch (REST via Proxy) to get OHLC/Change data immediately
     useEffect(() => {
         fetchMarketData();
-        const interval = setInterval(fetchMarketData, 5000);
-        return () => clearInterval(interval);
-    }, [selectedIndex]);
+    }, []); // Run once on mount
 
     const dynamicStyles = styles(colors);
 
@@ -263,8 +438,10 @@ export default function MarketScreen({ navigation }) {
                 }}
                 contentContainerStyle={dynamicStyles.listContent}
                 ListEmptyComponent={<Text style={{ color: colors.subText, textAlign: 'center', marginTop: 20 }}>
+
                     {loading ? "Loading..." : "No data available"}
                 </Text>}
+
             />
         </SafeAreaView>
     );

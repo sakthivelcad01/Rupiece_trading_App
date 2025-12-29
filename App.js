@@ -63,11 +63,13 @@ function NavigationRoot() {
           {!user ? (
             <Stack.Screen name="Login" component={LoginScreen} />
           ) : (
-            <Stack.Screen name="Main" component={AppTabs} />
+            <>
+              <Stack.Screen name="Main" component={AppTabs} />
+              <Stack.Screen name="Chart" component={ChartScreen} />
+              <Stack.Screen name="Settings" component={require('./src/screens/SettingsScreen').default} />
+              <Stack.Screen name="ChangePin" component={require('./src/screens/ChangePinScreen').default} />
+            </>
           )}
-          <Stack.Screen name="Chart" component={ChartScreen} />
-          <Stack.Screen name="Settings" component={require('./src/screens/SettingsScreen').default} />
-          <Stack.Screen name="ChangePin" component={require('./src/screens/ChangePinScreen').default} />
         </Stack.Navigator>
       </NavigationContainer>
 

@@ -1,14 +1,39 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { auth } from '../../firebaseConfig';
 import { useAuth } from '../context/AuthContext';
 import { MarketService } from '../services/MarketService';
 import { OrderService } from '../services/OrderService';
 import { useTheme } from '../context/ThemeContext';
-
 import { useAlert } from '../context/AlertContext';
 
-const PositionCard = ({ item, onExit, colors }) => {
+const LOT_SIZES = {
+    'NIFTY': 75,
+    'BANKNIFTY': 35,
+    'FINNIFTY': 65,
+    'MIDCPNIFTY': 140,
+    'MIDCAP': 140,
+    'SENSEX': 20,
+    'BANKEX': 30,
+    'DEFAULT': 1
+};
+
+const getLotSize = (symbol, itemLotSize) => {
+    if (itemLotSize) return itemLotSize;
+    if (!symbol) return LOT_SIZES.DEFAULT;
+    const upper = symbol.toUpperCase();
+    if (upper.includes('BANKNIFTY')) return LOT_SIZES.BANKNIFTY;
+    if (upper.includes('FINNIFTY')) return LOT_SIZES.FINNIFTY;
+    if (upper.includes('MIDCPNIFTY')) return LOT_SIZES.MIDCPNIFTY;
+    if (upper.includes('MIDCAP')) return LOT_SIZES.MIDCAP;
+    if (upper.includes('NIFTY')) return LOT_SIZES.NIFTY;
+    if (upper.includes('SENSEX')) return LOT_SIZES.SENSEX;
+    if (upper.includes('BANKEX')) return LOT_SIZES.BANKEX;
+    return LOT_SIZES.DEFAULT;
+};
+
+const PositionCard = ({ item, onExit, onAddSLTP, colors }) => {
     const isOpen = item.status === 'OPEN';
     const pnl = (item.ltp - item.avgPrice) * item.qty;
 
@@ -39,6 +64,14 @@ const PositionCard = ({ item, onExit, colors }) => {
                 </View>
             </View>
 
+            {/* Display SL/TP if set */}
+            {(item.sl || item.tp) && (
+                <View style={{ flexDirection: 'row', marginTop: 8, gap: 16 }}>
+                    {item.sl && <Text style={{ color: colors.danger, fontSize: 10 }}>SL: {item.sl}</Text>}
+                    {item.tp && <Text style={{ color: colors.success, fontSize: 10 }}>TP: {item.tp}</Text>}
+                </View>
+            )}
+
             <View style={[styles(colors).cardFooter]}>
                 <View>
                     <Text style={styles(colors).detailLabel}>P&L</Text>
@@ -48,12 +81,20 @@ const PositionCard = ({ item, onExit, colors }) => {
                 </View>
 
                 {isOpen && (
-                    <TouchableOpacity
-                        style={{ backgroundColor: colors.danger, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 }}
-                        onPress={() => onExit(item)}
-                    >
-                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 12 }}>EXIT</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity
+                            style={{ backgroundColor: colors.border, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 }}
+                            onPress={() => onAddSLTP(item)}
+                        >
+                            <Text style={{ color: colors.text, fontWeight: 'bold', fontSize: 12 }}>SL/TP</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={{ backgroundColor: colors.danger, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 }}
+                            onPress={() => onExit(item)}
+                        >
+                            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 12 }}>EXIT</Text>
+                        </TouchableOpacity>
+                    </View>
                 )}
             </View>
         </View>
@@ -108,12 +149,20 @@ const OrderCard = ({ item, onCancel, colors }) => {
                 <Text style={[styles(colors).detailLabel, { fontSize: 10 }]}>{dateStr}</Text>
 
                 {isPending && (
-                    <TouchableOpacity
-                        style={{ backgroundColor: colors.subText, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
-                        onPress={() => onCancel(item)}
-                    >
-                        <Text style={{ color: colors.background, fontWeight: 'bold', fontSize: 10 }}>CANCEL</Text>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <TouchableOpacity
+                            style={{ backgroundColor: colors.primary, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
+                            onPress={() => onCancel(item, true)} // True means modify
+                        >
+                            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 10 }}>MODIFY</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={{ backgroundColor: colors.subText, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 }}
+                            onPress={() => onCancel(item)}
+                        >
+                            <Text style={{ color: colors.background, fontWeight: 'bold', fontSize: 10 }}>CANCEL</Text>
+                        </TouchableOpacity>
+                    </View>
                 )}
             </View>
         </View>
@@ -183,6 +232,21 @@ export default function PnLScreen({ navigation }) {
     const [refreshing, setRefreshing] = useState(false);
     const [lastUpdated, setLastUpdated] = useState(null);
 
+    // Modal State
+    const [modalVisible, setModalVisible] = useState(false);
+    const [modalMode, setModalMode] = useState('MODIFY_ORDER'); // 'MODIFY_ORDER' or 'ADD_SLTP'
+    const [selectedItem, setSelectedItem] = useState(null);
+
+    // Modification Inputs
+    const [modPrice, setModPrice] = useState('');
+
+    // Instead of raw qty, we track 'Lots'
+    const [modLots, setModLots] = useState('1');
+    const [currentLotSize, setCurrentLotSize] = useState(1);
+
+    const [modSL, setModSL] = useState('');
+    const [modTP, setModTP] = useState('');
+
     const fetchData = async (silent = false) => {
         if (!selectedAccount) {
             setPositions([]);
@@ -191,13 +255,19 @@ export default function PnLScreen({ navigation }) {
             return;
         }
 
+        // Wait for Firebase Auth to be ready
+        if (!auth.currentUser) {
+            if (!silent) console.log("[PnLScreen] Waiting for auth.currentUser...");
+            return;
+        }
+
+        const user = auth.currentUser;
+
         if (!silent) setLoading(true);
         try {
-            const user = require('firebase/auth').getAuth().currentUser; // Direct Access or pass via props if unstable
-
             if (activeTab === 'POSITIONS') {
                 // Auto-Exipry Check Hook
-                if (!silent && user) {
+                if (!silent) {
                     OrderService.checkAndSquareOffExpiredPositions(selectedAccount, user.uid).catch(console.error);
                 }
 
@@ -262,7 +332,23 @@ export default function PnLScreen({ navigation }) {
         });
     };
 
-    const handleCancelOrder = (item) => {
+    const handleCancelOrder = (item, isModify = false) => {
+        if (isModify) {
+            setSelectedItem(item);
+            setModPrice(item.price.toString());
+
+            // Determine Lot Size from Item or Symbol
+            const lSize = getLotSize(item.symbol, item.lotSize);
+            setCurrentLotSize(lSize);
+
+            // Calculate Lots from Qty
+            const lots = Math.max(1, Math.round(item.qty / lSize));
+            setModLots(lots.toString());
+
+            setModalMode('MODIFY_ORDER');
+            setModalVisible(true);
+            return;
+        }
         showAlert(
             "Cancel Order",
             `Are you sure you want to cancel the order for ${item.symbol}?`,
@@ -288,6 +374,57 @@ export default function PnLScreen({ navigation }) {
         );
     };
 
+    const handleAddSLTP = (item) => {
+        setSelectedItem(item);
+        setModSL(item.sl ? item.sl.toString() : '');
+        setModTP(item.tp ? item.tp.toString() : '');
+        setModalMode('ADD_SLTP');
+        setModalVisible(true);
+    };
+
+    const submitModification = async () => {
+        if (!selectedItem || !selectedAccount) return;
+
+        setLoading(true);
+        try {
+            if (modalMode === 'MODIFY_ORDER') {
+                const newPrice = parseFloat(modPrice);
+                const lots = parseInt(modLots);
+
+                if (isNaN(newPrice) || isNaN(lots) || newPrice <= 0 || lots <= 0) {
+                    throw "Invalid Price or Quantity";
+                }
+
+                const newQty = lots * currentLotSize;
+
+                const res = await OrderService.modifyPendingOrder(selectedItem.id, newPrice, newQty, selectedAccount);
+                if (res.success) {
+                    showAlert("Success", "Order Modified Successfully", [], "success");
+                    setModalVisible(false);
+                    fetchData();
+                } else {
+                    throw res.error;
+                }
+            } else if (modalMode === 'ADD_SLTP') {
+                const slVal = modSL ? parseFloat(modSL) : null;
+                const tpVal = modTP ? parseFloat(modTP) : null;
+
+                const res = await OrderService.updatePositionSLTP(selectedAccount, selectedItem.id, slVal, tpVal);
+                if (res.success) {
+                    showAlert("Success", "SL/TP Updated", [], "success");
+                    setModalVisible(false);
+                    fetchData();
+                } else {
+                    throw res.error;
+                }
+            }
+        } catch (error) {
+            showAlert("Error", error.toString(), [], "error");
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const dynamicStyles = styles(colors);
 
     const renderContent = () => {
@@ -304,7 +441,7 @@ export default function PnLScreen({ navigation }) {
             return (
                 <FlatList
                     data={positions}
-                    renderItem={({ item }) => <PositionCard item={item} onExit={handleExitPosition} colors={colors} />}
+                    renderItem={({ item }) => <PositionCard item={item} onExit={handleExitPosition} onAddSLTP={handleAddSLTP} colors={colors} />}
                     keyExtractor={item => item.id}
                     contentContainerStyle={dynamicStyles.listContent}
                 />
@@ -384,6 +521,109 @@ export default function PnLScreen({ navigation }) {
             </View>
 
             {renderContent()}
+
+            {/* Modification Modal */}
+            <Modal
+                transparent={true}
+                visible={modalVisible}
+                animationType="slide"
+                onRequestClose={() => setModalVisible(false)}
+            >
+                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                    <View style={styles(colors).modalOverlay}>
+                        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles(colors).modalContent}>
+                            <Text style={styles(colors).modalTitle}>
+                                {modalMode === 'MODIFY_ORDER' ? 'Modify Order' : 'Update SL/TP'}
+                            </Text>
+
+                            {/* Info */}
+                            <Text style={{ color: colors.subText, marginBottom: 12 }}>
+                                {selectedItem?.symbol} {selectedItem?.type}
+                            </Text>
+
+                            {modalMode === 'MODIFY_ORDER' ? (
+                                <>
+                                    <Text style={styles(colors).inputLabel}>Price</Text>
+                                    <TextInput
+                                        style={styles(colors).input}
+                                        value={modPrice}
+                                        onChangeText={setModPrice}
+                                        keyboardType="numeric"
+                                        placeholder="Order Price"
+                                        placeholderTextColor={colors.subText}
+                                    />
+
+                                    <Text style={styles(colors).inputLabel}>Quantity (Lots)</Text>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                                        <TouchableOpacity
+                                            style={[styles(colors).qtyBtn, { width: 40, height: 40 }]}
+                                            onPress={() => setModLots(String(Math.max(1, parseInt(modLots) - 1)))}
+                                        >
+                                            <Text style={styles(colors).qtyBtnText}>-</Text>
+                                        </TouchableOpacity>
+
+                                        <View style={{ flex: 1 }}>
+                                            <TextInput
+                                                style={[styles(colors).input, { textAlign: 'center' }]}
+                                                value={modLots}
+                                                onChangeText={t => setModLots(parseInt(t) || 1)}
+                                                keyboardType="numeric"
+                                            />
+                                            <Text style={{ textAlign: 'center', color: colors.subText, fontSize: 10, marginTop: 4 }}>
+                                                = {parseInt(modLots || 0) * currentLotSize} Qty
+                                            </Text>
+                                        </View>
+
+                                        <TouchableOpacity
+                                            style={[styles(colors).qtyBtn, { width: 40, height: 40 }]}
+                                            onPress={() => setModLots(String(parseInt(modLots || 0) + 1))}
+                                        >
+                                            <Text style={styles(colors).qtyBtnText}>+</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </>
+                            ) : (
+                                <>
+                                    <Text style={styles(colors).inputLabel}>Stop Loss (SL) Price</Text>
+                                    <TextInput
+                                        style={styles(colors).input}
+                                        value={modSL}
+                                        onChangeText={setModSL}
+                                        keyboardType="numeric"
+                                        placeholder="Leave empty to remove"
+                                        placeholderTextColor={colors.subText}
+                                    />
+
+                                    <Text style={styles(colors).inputLabel}>Take Profit (TP) Price</Text>
+                                    <TextInput
+                                        style={styles(colors).input}
+                                        value={modTP}
+                                        onChangeText={setModTP}
+                                        keyboardType="numeric"
+                                        placeholder="Leave empty to remove"
+                                        placeholderTextColor={colors.subText}
+                                    />
+                                </>
+                            )}
+
+                            <View style={{ flexDirection: 'row', gap: 12, marginTop: 24 }}>
+                                <TouchableOpacity
+                                    style={[styles(colors).button, { backgroundColor: colors.subText }]}
+                                    onPress={() => setModalVisible(false)}
+                                >
+                                    <Text style={styles(colors).buttonText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles(colors).button, { backgroundColor: colors.primary }]}
+                                    onPress={submitModification}
+                                >
+                                    <Text style={styles(colors).buttonText}>Confirm</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </KeyboardAvoidingView>
+                    </View>
+                </TouchableWithoutFeedback>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -557,5 +797,62 @@ const styles = (colors) => StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center'
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        padding: 24
+    },
+    modalContent: {
+        backgroundColor: colors.card,
+        borderRadius: 16,
+        padding: 24,
+        borderWidth: 1,
+        borderColor: colors.border
+    },
+    modalTitle: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: colors.text,
+        marginBottom: 8
+    },
+    inputLabel: {
+        color: colors.subText,
+        fontSize: 12,
+        marginTop: 12,
+        marginBottom: 4
+    },
+    input: {
+        backgroundColor: colors.background,
+        color: colors.text,
+        padding: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.border,
+        fontSize: 16
+    },
+    button: {
+        flex: 1,
+        padding: 14,
+        borderRadius: 8,
+        alignItems: 'center'
+    },
+    buttonText: {
+        color: '#fff',
+        fontWeight: 'bold',
+        fontSize: 16
+    },
+    qtyBtn: {
+        backgroundColor: colors.inputBg,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: colors.border
+    },
+    qtyBtnText: {
+        color: colors.text,
+        fontSize: 24
     }
 });
