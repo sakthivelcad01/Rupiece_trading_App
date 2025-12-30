@@ -148,12 +148,17 @@ export const AuthProvider = ({ children }) => {
 
     const logout = async () => {
         try {
+            setLoading(true);
             await signOut(auth);
+            // State reset is handled by onAuthStateChanged listener
             setSelectedAccount(null);
             setAccounts([]);
+            setError(null); // Clear any auth errors
             if (user) await AsyncStorage.removeItem(`lastAccount_${user.uid}`);
         } catch (e) {
-            console.error(e);
+            console.error("Logout Error:", e);
+        } finally {
+            setLoading(false);
         }
     };
 
