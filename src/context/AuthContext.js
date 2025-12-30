@@ -114,6 +114,64 @@ export const AuthProvider = ({ children }) => {
         };
     }, [user]);
 
+    // Session Security Logic
+    React.useEffect(() => {
+        if (!user) return;
+
+        let sessionUnsub = () => { };
+
+        const setupSession = async () => {
+            try {
+                // 1. Get Local Session ID
+                let localSessionId = await AsyncStorage.getItem(`sessionId_${user.uid}`);
+
+                // 2. If no local session (first run or fresh login), create one
+                if (!localSessionId) {
+                    localSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
+                    await AsyncStorage.setItem(`sessionId_${user.uid}`, localSessionId);
+
+                    // Update Firestore (User Just Logged In)
+                    await import('firebase/firestore').then(({ setDoc, doc, serverTimestamp }) => {
+                        setDoc(doc(db, "rupiecemain", user.uid), {
+                            sessionId: localSessionId,
+                            lastLogin: serverTimestamp()
+                        }, { merge: true });
+                    });
+                }
+
+                // 3. Listen to Firestore for Remote Changes
+                const docRef = import('firebase/firestore').then(({ doc }) => doc(db, "rupiecemain", user.uid));
+
+                // Note: handling async import inside effect is tricky, assuming db/doc available from imports at top
+                // Re-using top-level imports for cleaner code
+                const userDocRef = doc(db, "rupiecemain", user.uid);
+
+                sessionUnsub = onSnapshot(userDocRef, async (snapshot) => {
+                    if (snapshot.exists()) {
+                        const data = snapshot.data();
+                        const remoteSessionId = data.sessionId;
+
+                        if (remoteSessionId && remoteSessionId !== localSessionId) {
+                            console.log("[Auth] Session Mismatch! Remote:", remoteSessionId, "Local:", localSessionId);
+                            // Mismatch! Log out.
+                            await logout(true); // Pass true to indicate forced logout
+                        }
+                    }
+                });
+
+            } catch (err) {
+                console.error("Session Setup Error:", err);
+            }
+        };
+
+        setupSession();
+
+        return () => {
+            sessionUnsub();
+        };
+    }, [user]);
+
+
     const handleSetSelectedAccount = async (account) => {
         setSelectedAccount(account);
         if (user && account) {
@@ -125,7 +183,23 @@ export const AuthProvider = ({ children }) => {
         setLoading(true);
         setError(null);
         try {
-            await signInWithEmailAndPassword(auth, email, password);
+            const result = await signInWithEmailAndPassword(auth, email, password);
+            const user = result.user;
+
+            // Generate New Session ID
+            const newSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
+
+            // 1. Save Local
+            await AsyncStorage.setItem(`sessionId_${user.uid}`, newSessionId);
+
+            // 2. Update Firestore (Force other devices out)
+            await import('firebase/firestore').then(({ setDoc, doc, serverTimestamp }) => {
+                setDoc(doc(db, "rupiecemain", user.uid), {
+                    sessionId: newSessionId,
+                    lastLogin: serverTimestamp()
+                }, { merge: true });
+            });
+
             return true;
         } catch (err) {
             let msg = err.message;
@@ -139,22 +213,39 @@ export const AuthProvider = ({ children }) => {
                 msg = "Network Error. Please check your internet.";
             }
             setError(msg);
-            setLoading(false); // Fix: Ensure loading is stopped on error
+            setLoading(false);
             return false;
         } finally {
-            // Success case handled by auth listener
+            // handled by listener
         }
     };
 
-    const logout = async () => {
+    const logout = async (isForced = false) => {
         try {
             setLoading(true);
+
+            // Clear Local Session
+            if (user) {
+                await AsyncStorage.removeItem(`sessionId_${user.uid}`);
+                await AsyncStorage.removeItem(`lastAccount_${user.uid}`);
+            }
+
             await signOut(auth);
-            // State reset is handled by onAuthStateChanged listener
+
             setSelectedAccount(null);
             setAccounts([]);
-            setError(null); // Clear any auth errors
-            if (user) await AsyncStorage.removeItem(`lastAccount_${user.uid}`);
+            setError(null);
+
+            if (isForced) {
+                // We can't easily show an alert from Context without a Ref or Service
+                // But setting Error might show it on Login Screen if redirected?
+                // Ideally, use AlertContext if available here, or a simple Alert
+                setTimeout(() => {
+                    // Simple alert might crash if app is in background, but okay for active use
+                    alert("Session Expired: You have been logged out because you logged in on another device.");
+                }, 500);
+            }
+
         } catch (e) {
             console.error("Logout Error:", e);
         } finally {
