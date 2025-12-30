@@ -42,10 +42,10 @@ export const OrderService = {
      */
     placeOrder: async (orderDetails, account, userId) => {
         try {
-            // Market Hours Check (Request to disable for testing)
-            // if (!OrderService.isMarketOpen()) {
-            //      throw "Market is Closed. Trading hours are 09:15 AM to 03:30 PM.";
-            // }
+            // Market Hours Check
+            if (!OrderService.isMarketOpen()) {
+                throw "Market is Closed. Trading hours are 09:15 AM to 03:30 PM.";
+            }
 
             // Get Auth Token
             if (!auth.currentUser) throw "User not authenticated";
