@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import { MarketService } from './MarketService';
 import { FeatureFlagService } from './FeatureFlagService';
+import { API_URL } from '../config/ApiConfig';
 
 export const OrderService = {
 
@@ -51,8 +52,8 @@ export const OrderService = {
             const authToken = await auth.currentUser.getIdToken();
 
             // API Call
-            // TODO: Move URL to env
-            const API_URL = "http://localhost:3000";
+            // const API_URL = "http://localhost:3000"; // Moved to config
+            console.log(`[OrderService] Placing Order to: ${API_URL}/placeOrder`);
 
             const response = await fetch(`${API_URL}/placeOrder`, {
                 method: 'POST',
@@ -285,7 +286,7 @@ export const OrderService = {
             if (!auth.currentUser) throw "User not authenticated";
             const authToken = await auth.currentUser.getIdToken();
 
-            const API_URL = "http://localhost:3000";
+            // const API_URL = "http://localhost:3000";
 
             const response = await fetch(`${API_URL}/executeLimitOrder`, {
                 method: 'POST',
@@ -321,7 +322,7 @@ export const OrderService = {
         try {
             if (!auth.currentUser) throw "User not authenticated";
             const authToken = await auth.currentUser.getIdToken();
-            const API_URL = "http://localhost:3000";
+            // const API_URL = "http://localhost:3000";
 
             const response = await fetch(`${API_URL}/modifyOrder`, {
                 method: 'POST',
@@ -351,7 +352,7 @@ export const OrderService = {
         try {
             if (!auth.currentUser) throw "User not authenticated";
             const authToken = await auth.currentUser.getIdToken();
-            const API_URL = "http://localhost:3000";
+            // const API_URL = "http://localhost:3000";
 
             const response = await fetch(`${API_URL}/updateSLTP`, {
                 method: 'POST',
@@ -377,7 +378,7 @@ export const OrderService = {
         try {
             if (!auth.currentUser) throw "User not authenticated";
             const authToken = await auth.currentUser.getIdToken();
-            const API_URL = "http://localhost:3000";
+            // const API_URL = "http://localhost:3000";
 
             const response = await fetch(`${API_URL}/cancelOrder`, {
                 method: 'POST',
