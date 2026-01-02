@@ -328,7 +328,7 @@ export default function PnLScreen({ navigation }) {
             strike: item.symbol.split(' ')[1],
             expiry: item.expiry || '',
             exitQty: item.qty,
-            lotSize: item.lotSize
+            lotSize: item.lotSize || item.lot_size
         });
     };
 
