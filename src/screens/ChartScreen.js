@@ -178,7 +178,10 @@ export default function ChartScreen({ route, navigation }) {
 
   useEffect(() => {
     fetchDailyStats();
-  }, [symbol]);
+    fetchLiveQuote(); // Fetch live price immediately
+    const interval = setInterval(fetchLiveQuote, 5000); // Poll every 5s
+    return () => clearInterval(interval);
+  }, [symbol, instrumentKey]);
 
   useEffect(() => {
     if (webViewRef.current) {
@@ -209,7 +212,12 @@ export default function ChartScreen({ route, navigation }) {
   const fetchDailyStats = async () => {
     const yahooSymbol = getYahooSymbol(symbol);
     // Fetch 1 Year to calculate 52 Week High/Low
-    const result = await MarketService.getYahooCandles(yahooSymbol, '1y', '1d');
+    let result;
+    if (instrumentKey) {
+      result = await MarketService.getCandles(instrumentKey, '1D', '1y');
+    } else {
+      result = await MarketService.getYahooCandles(yahooSymbol, '1y', '1d');
+    }
     if (result.data) {
       const raw = result.data.map(item => ({
         date: new Date(item[0]),
