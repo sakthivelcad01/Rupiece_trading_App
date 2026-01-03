@@ -253,6 +253,27 @@ export default function ChartScreen({ route, navigation }) {
     }
   };
 
+  const fetchLiveQuote = async () => {
+    if (!instrumentKey) return;
+    try {
+      const quotes = await MarketService.getQuotes([instrumentKey]);
+      const quote = quotes[instrumentKey];
+      if (quote) {
+        setCurrentQuote(prev => ({
+          ...prev,
+          price: quote.last_price,
+          change: quote.net_change || (quote.last_price - (quote.ohlc?.close || quote.last_price)),
+          open: quote.ohlc?.open || prev.open,
+          high: quote.ohlc?.high || prev.high,
+          low: quote.ohlc?.low || prev.low,
+          prevClose: quote.ohlc?.close || prev.prevClose
+        }));
+      }
+    } catch (e) {
+      console.error("fetchLiveQuote Error:", e);
+    }
+  };
+
   const fetchHistory = async () => {
     setLoading(true);
     setErrorMsg(null);
