@@ -222,57 +222,72 @@ export default function AccountScreen({ navigation }) {
                 {/* Account Status Banner */}
                 {selectedAccount && stats.equity > 0 && (
                     <View style={{ marginBottom: 16 }}>
-                        {stats.equity < ((selectedAccount.accountSize || selectedAccount.balance) * 0.92) ? (
-                            <View>
-                                <View style={[styles.statusBanner, { backgroundColor: '#ef444420', borderColor: '#ef4444' }]}>
-                                    <Text style={[styles.statusTitle, { color: '#ef4444' }]}>⛔ Trading Blocked</Text>
-                                    <Text style={[styles.statusMsg, { color: '#ef4444' }]}>
-                                        Max Loss Limit Reached (Below 92% Equity).
-                                    </Text>
-                                </View>
-                            </View>
-                        ) : stats.equity < ((selectedAccount.accountSize || selectedAccount.balance) * 0.935) ? (
-                            /* Styled Margin Call Banner */
-                            <View style={{
-                                backgroundColor: '#EA580C', // Dark Orange
-                                borderRadius: 12,
-                                padding: 16,
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                shadowColor: "#EA580C",
-                                shadowOffset: { width: 0, height: 4 },
-                                shadowOpacity: 0.3,
-                                shadowRadius: 8,
-                                elevation: 5,
-                                borderWidth: 1,
-                                borderColor: '#fff'
-                            }}>
-                                <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', padding: 10, borderRadius: 50, marginRight: 16 }}>
-                                    <AlertTriangle size={32} color="#fff" fill="white" />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                    <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 }}>HIGH RISK WARNING</Text>
-                                    <Text style={{ color: '#fed7aa', fontSize: 14, fontWeight: '600' }}>
-                                        Loss exceeds 6.5%. approaching Max Loss.
-                                    </Text>
-                                    <Text style={{ color: '#fff', fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>
-                                        Caution: Reduce risk to avoid failure.
-                                    </Text>
-                                </View>
-                            </View>
-                        ) : stats.equity >= ((selectedAccount.accountSize || selectedAccount.balance) * 1.15) ? (
-                            <View>
-                                <View style={[styles.statusBanner, { backgroundColor: '#22c55e20', borderColor: '#22c55e' }]}>
-                                    <Text style={[styles.statusTitle, { color: '#22c55e' }]}>🎉 Account Passed!</Text>
-                                    <Text style={[styles.statusMsg, { color: '#22c55e' }]}>
-                                        Congratulations! You've hit the 15% Profit Target.
-                                    </Text>
-                                </View>
-                            </View>
-                        ) : null}
+                        {(() => {
+                            const size = selectedAccount.accountSize || selectedAccount.balance;
+                            const isCompetition = selectedAccount.isCompetition || selectedAccount.phase === 'Competition';
+                            // 10% (0.90) for Competition, 8% (0.92) for Standard
+                            const maxLossPct = isCompetition ? 0.90 : 0.92;
+                            const profitTargetPct = 1.15; // 15%
+
+                            if (stats.equity < (size * maxLossPct)) {
+                                return (
+                                    <View>
+                                        <View style={[styles.statusBanner, { backgroundColor: '#ef444420', borderColor: '#ef4444' }]}>
+                                            <Text style={[styles.statusTitle, { color: '#ef4444' }]}>⛔ Trading Blocked</Text>
+                                            <Text style={[styles.statusMsg, { color: '#ef4444' }]}>
+                                                Max Loss Limit Reached (Below {isCompetition ? '90' : '92'}% Equity).
+                                            </Text>
+                                        </View>
+                                    </View>
+                                );
+                            } else if (stats.equity < (size * (isCompetition ? 0.915 : 0.935))) {
+                                // Dynamic Warning Threshold (1.5% buffer)
+                                return (
+                                    <View style={{
+                                        backgroundColor: '#EA580C', // Dark Orange
+                                        borderRadius: 12,
+                                        padding: 16,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        shadowColor: "#EA580C",
+                                        shadowOffset: { width: 0, height: 4 },
+                                        shadowOpacity: 0.3,
+                                        shadowRadius: 8,
+                                        elevation: 5,
+                                        borderWidth: 1,
+                                        borderColor: '#fff'
+                                    }}>
+                                        <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', padding: 10, borderRadius: 50, marginRight: 16 }}>
+                                            <AlertTriangle size={32} color="#fff" fill="white" />
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold', marginBottom: 4 }}>HIGH RISK WARNING</Text>
+                                            <Text style={{ color: '#fed7aa', fontSize: 14, fontWeight: '600' }}>
+                                                Loss approaching Max Loss Limit.
+                                            </Text>
+                                            <Text style={{ color: '#fff', fontSize: 12, marginTop: 4, fontStyle: 'italic' }}>
+                                                Caution: Reduce risk to avoid failure.
+                                            </Text>
+                                        </View>
+                                    </View>
+                                );
+                            } else if (!isCompetition && stats.equity >= (size * profitTargetPct)) {
+                                // Only show Pass banner if NOT competition (assuming comps don't "Pass" but just Rank)
+                                return (
+                                    <View>
+                                        <View style={[styles.statusBanner, { backgroundColor: '#22c55e20', borderColor: '#22c55e' }]}>
+                                            <Text style={[styles.statusTitle, { color: '#22c55e' }]}>🎉 Account Passed!</Text>
+                                            <Text style={[styles.statusMsg, { color: '#22c55e' }]}>
+                                                Congratulations! You've hit the 15% Profit Target.
+                                            </Text>
+                                        </View>
+                                    </View>
+                                );
+                            }
+                            return null;
+                        })()}
                     </View>
-                )
-                }
+                )}
 
                 {/* Account Section */}
                 <View style={styles.accountsSection}>
@@ -371,57 +386,66 @@ export default function AccountScreen({ navigation }) {
                             <Text style={styles.sectionHeader}>Account Objectives</Text>
                             <View style={styles.objectivesCard}>
 
-                                {/* Profit Target Row */}
-                                <View style={{ marginBottom: 20, flexDirection: 'row', alignItems: 'center' }}>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.perfLabel}>Profit Target</Text>
-                                        <Text style={[styles.perfValue, { color: colors.success }]}>
-                                            ₹{((selectedAccount.accountSize || selectedAccount.balance) * 1.15).toFixed(0)}
-                                        </Text>
-                                    </View>
-                                    <View style={{ flex: 1.5, paddingLeft: 12 }}>
-                                        {(() => {
-                                            const size = selectedAccount.accountSize || selectedAccount.balance;
-                                            const equity = stats.equity || size;
-                                            const targetProfit = size * 0.15;
-                                            const currentProfit = Math.max(0, equity - size);
-                                            const profitPct = Math.min(currentProfit / targetProfit, 1);
-                                            return (
-                                                <View style={{ flexDirection: 'row', height: 10 }}>
-                                                    {[0, 1, 2, 3, 4].map(i => (
-                                                        <View key={i} style={{ flex: 1, marginRight: 4, borderRadius: 6, backgroundColor: profitPct > (i * 0.2) ? colors.success : colors.card, borderWidth: 1, borderColor: colors.success, opacity: profitPct > (i * 0.2) ? 1 : 0.3 }} />
-                                                    ))}
-                                                </View>
-                                            );
-                                        })()}
-                                    </View>
-                                </View>
+                                {/* Objectives Logic */}
+                                {(() => {
+                                    const size = selectedAccount.accountSize || selectedAccount.balance;
+                                    const equity = stats.equity || size;
+                                    const isCompetition = selectedAccount.isCompetition || selectedAccount.phase === 'Competition';
 
-                                {/* Max Loss Row */}
-                                <View style={{ marginBottom: 20, flexDirection: 'row', alignItems: 'center' }}>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.perfLabel}>Max Loss</Text>
-                                        <Text style={[styles.perfValue, { color: colors.danger }]}>
-                                            ₹{((selectedAccount.accountSize || selectedAccount.balance) * 0.92).toFixed(0)}
-                                        </Text>
-                                    </View>
-                                    <View style={{ flex: 1.5, paddingLeft: 12 }}>
-                                        {(() => {
-                                            const size = selectedAccount.accountSize || selectedAccount.balance;
-                                            const equity = stats.equity || size;
-                                            const maxLossAmount = size * 0.08;
-                                            const currentLoss = size - equity;
-                                            const lossPct = Math.min(Math.max(currentLoss / maxLossAmount, 0), 1);
-                                            return (
-                                                <View style={{ flexDirection: 'row', height: 10 }}>
-                                                    {[0, 1, 2, 3, 4].map(i => (
-                                                        <View key={i} style={{ flex: 1, marginRight: 4, borderRadius: 6, backgroundColor: lossPct > (i * 0.2) ? colors.danger : colors.card, borderWidth: 1, borderColor: colors.danger, opacity: lossPct > (i * 0.2) ? 1 : 0.3 }} />
-                                                    ))}
+                                    const maxLossPct = isCompetition ? 0.10 : 0.08; // 10% vs 8% Loss
+                                    const maxLossAmount = size * maxLossPct;
+                                    const maxLossThreshold = size * (1 - maxLossPct);
+
+                                    const currentLoss = size - equity;
+                                    // Visual bar: filled as we approach max loss
+                                    // If loss = 0, pct = 0. If loss = max, pct = 1.
+                                    const lossBarPwd = Math.min(Math.max(currentLoss / maxLossAmount, 0), 1);
+
+                                    // Profit Bar
+                                    const targetProfit = size * 0.15;
+                                    const currentProfit = Math.max(0, equity - size);
+                                    const profitBarPwd = Math.min(currentProfit / targetProfit, 1);
+
+                                    return (
+                                        <>
+                                            {/* Profit Target Row - HIDDEN FOR COMPETITIONS */}
+                                            {!isCompetition && (
+                                                <View style={{ marginBottom: 20, flexDirection: 'row', alignItems: 'center' }}>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={styles.perfLabel}>Profit Target</Text>
+                                                        <Text style={[styles.perfValue, { color: colors.success }]}>
+                                                            ₹{(size * 1.15).toFixed(0)}
+                                                        </Text>
+                                                    </View>
+                                                    <View style={{ flex: 1.5, paddingLeft: 12 }}>
+                                                        <View style={{ flexDirection: 'row', height: 10 }}>
+                                                            {[0, 1, 2, 3, 4].map(i => (
+                                                                <View key={i} style={{ flex: 1, marginRight: 4, borderRadius: 6, backgroundColor: profitBarPwd > (i * 0.2) ? colors.success : colors.card, borderWidth: 1, borderColor: colors.success, opacity: profitBarPwd > (i * 0.2) ? 1 : 0.3 }} />
+                                                            ))}
+                                                        </View>
+                                                    </View>
                                                 </View>
-                                            );
-                                        })()}
-                                    </View>
-                                </View>
+                                            )}
+
+                                            {/* Max Loss Row */}
+                                            <View style={{ marginBottom: 20, flexDirection: 'row', alignItems: 'center' }}>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.perfLabel}>Max Loss ({isCompetition ? '10%' : '8%'})</Text>
+                                                    <Text style={[styles.perfValue, { color: colors.danger }]}>
+                                                        ₹{maxLossThreshold.toFixed(0)}
+                                                    </Text>
+                                                </View>
+                                                <View style={{ flex: 1.5, paddingLeft: 12 }}>
+                                                    <View style={{ flexDirection: 'row', height: 10 }}>
+                                                        {[0, 1, 2, 3, 4].map(i => (
+                                                            <View key={i} style={{ flex: 1, marginRight: 4, borderRadius: 6, backgroundColor: lossBarPwd > (i * 0.2) ? colors.danger : colors.card, borderWidth: 1, borderColor: colors.danger, opacity: lossBarPwd > (i * 0.2) ? 1 : 0.3 }} />
+                                                        ))}
+                                                    </View>
+                                                </View>
+                                            </View>
+                                        </>
+                                    );
+                                })()}
 
                                 {/* Min Trading Days Row */}
                                 <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center' }}>

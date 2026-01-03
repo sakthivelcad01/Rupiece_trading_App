@@ -9,11 +9,11 @@ import { useTheme } from '../context/ThemeContext';
 import { useAlert } from '../context/AlertContext';
 
 const LOT_SIZES = {
-    'NIFTY': 75,
-    'BANKNIFTY': 35,
+    'NIFTY': 65,
+    'BANKNIFTY': 30,
     'FINNIFTY': 65,
-    'MIDCPNIFTY': 140,
-    'MIDCAP': 140,
+    'MIDCPNIFTY': 75,
+    'MIDCAP': 120, // Match backend
     'SENSEX': 20,
     'BANKEX': 30,
     'DEFAULT': 1

@@ -93,6 +93,67 @@ export const MarketService = {
     },
 
     /**
+     * Generic fetch for candles (intraday or historical) via Proxy.
+     */
+    getCandles: async (instrumentKey, interval, range) => {
+        try {
+            // Map interval to Upstox format
+            let upstoxInterval = '1minute';
+            let isIntraday = true;
+
+            switch (interval) {
+                case '1m': upstoxInterval = '1minute'; break;
+                case '2m': upstoxInterval = '3minute'; break; // Approx
+                case '5m': upstoxInterval = '5minute'; break;
+                case '15m': upstoxInterval = '15minute'; break;
+                case '30m': upstoxInterval = '30minute'; break;
+                case '1H': case '60m': upstoxInterval = '60minute'; break;
+                case '1D': upstoxInterval = 'day'; isIntraday = false; break;
+                case '1W': upstoxInterval = 'week'; isIntraday = false; break;
+                case '1M': upstoxInterval = 'month'; isIntraday = false; break;
+                default: upstoxInterval = '5minute';
+            }
+
+            // Calculate from/to dates based on range
+            const toDate = new Date().toISOString().split('T')[0];
+            let fromDate = new Date();
+
+            // Subtract range
+            // Simple approximation
+            if (range === '1d') fromDate.setDate(fromDate.getDate() - 2);
+            else if (range === '5d') fromDate.setDate(fromDate.getDate() - 5);
+            else if (range === '1mo') fromDate.setMonth(fromDate.getMonth() - 1);
+            else if (range === '1y') fromDate.setFullYear(fromDate.getFullYear() - 1);
+            else fromDate.setDate(fromDate.getDate() - 30); // Default
+
+            const fromDateStr = fromDate.toISOString().split('T')[0];
+
+            const response = await webSocketService.request({
+                type: 'candles',
+                instrumentKey,
+                interval: upstoxInterval,
+                toDate,
+                fromDate: fromDateStr,
+                isIntraday
+            });
+
+            if (response && response.candles) {
+                // Map to [[isoDate, o, h, l, c, v]]
+                const mapped = response.candles.map(c => [
+                    c[0], // Date string
+                    c[1], c[2], c[3], c[4], c[5]
+                ]);
+                return { data: mapped };
+            }
+            return { data: [] };
+
+        } catch (e) {
+            console.error("MarketService getCandles Error:", e);
+            return { error: e.toString() };
+        }
+    },
+
+    /**
      * Searches for instruments via WebSocket Proxy.
      */
     searchInstruments: async (query, segment) => {

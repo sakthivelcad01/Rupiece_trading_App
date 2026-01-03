@@ -10,11 +10,11 @@ import { useTheme } from '../context/ThemeContext';
 import { useNetwork } from '../context/NetworkContext';
 
 const LOT_SIZES = {
-    'NIFTY': 75,
-    'BANKNIFTY': 35,
+    'NIFTY': 65,
+    'BANKNIFTY': 30,
     'FINNIFTY': 65,
-    'MIDCPNIFTY': 140,
-    'MIDCAP': 140,
+    'MIDCPNIFTY': 75,
+    'MIDCAP': 120,
     'SENSEX': 20,
     'BANKEX': 30,
     'DEFAULT': 1
@@ -98,6 +98,9 @@ export default function TradeScreen({ route, navigation }) {
     const liveData = useMarketData(instrumentKey ? [instrumentKey] : []);
 
     useEffect(() => {
+        // Reset quote when instrument changes to prevent stale data (e.g. wrong Lot Size)
+        setQuote(null);
+
         if (instrumentKey && liveData[instrumentKey]) {
             setQuote(liveData[instrumentKey]);
         }
@@ -204,13 +207,25 @@ export default function TradeScreen({ route, navigation }) {
         const isFuture = type === 'FUT';
         // Use Limit Price if set, otherwise Market Price
         const effectivePrice = (orderClass === 'LIMIT' && parseFloat(limitPrice)) ? parseFloat(limitPrice) : quote.last_price;
-        const orderValue = effectivePrice * totalQty;
+
+        // FIX: If closing a position (exitQty exists), ensure we don't oversell due to Lot Size mismatch (e.g. 75 vs 65)
+        let finalQty = totalQty;
+        if (exitQty) {
+            // If we are strictly closing, cap at exitQty
+            // NOTE: This assumes 'Close' flow implies max quantity is the open position.
+            if (totalQty > exitQty) {
+                console.log(`[TradeScreen] Clamping Qty from ${totalQty} to ${exitQty} (Lot Size Mismatch Fix)`);
+                finalQty = exitQty;
+            }
+        }
+
+        const orderValue = effectivePrice * finalQty;
         const marginRequired = isFuture ? (orderValue / 10) : orderValue;
 
         const orderDetails = {
             instrumentKey,
             symbol: symbol || (quote?.symbol),
-            qty: totalQty,
+            qty: finalQty,
             price: quote.last_price,
             type: orderType,
             product: productType,

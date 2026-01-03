@@ -14,6 +14,7 @@ class WebSocketService {
         this.snapshotFetched = false;
         this.reconnectTimer = null;
         this.pendingRequests = new Map(); // requestId -> { resolve, reject, timeout }
+        this.authResolve = null; // For Auth Handshake
 
         // Automatically Send Auth when user logs in if already connected
         onAuthStateChanged(auth, (user) => {
@@ -98,15 +99,29 @@ class WebSocketService {
                 // 1. Send Auth / Relay Token
                 await this.relayToken();
 
-                // 2. Wait for Server to Verify Token (Fix Race Condition: Auth is slow, Subscribe is fast)
+                // 2. Wait for Server to Verify Token (Handshake)
                 console.log("[WebSocketService] Waiting for Server Auth Verification...");
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                // await new Promise(resolve => setTimeout(resolve, 5000));
 
-                console.log("[WebSocketService] Connected & Authenticated (assumed).");
-                this.isConnected = true; // Set to true ONLY after delay/auth
+                // Allow up to 10s for auth
+                const authPromise = new Promise(resolve => {
+                    this.authResolve = resolve;
+                });
 
-                // 3. Resubscribe to any cached keys
-                this.resubscribe();
+                // Race a timeout
+                const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(false), 10000));
+
+                const authSuccess = await Promise.race([authPromise, timeoutPromise]);
+
+                if (authSuccess) {
+                    console.log("[WebSocketService] Connected & Authenticated (Verified).");
+                    this.isConnected = true;
+                    // 3. Resubscribe to any cached keys
+                    this.resubscribe();
+                } else {
+                    console.error("[WebSocketService] Auth Handshake Timed Out!");
+                    this.socket.close(); // Retry
+                }
             };
 
             this.socket.onmessage = (event) => {
@@ -116,6 +131,15 @@ class WebSocketService {
 
                     if (data.type === 'pong') {
                         console.log("[WebSocketService] PONG received. Token Available:", data.tokenAvailable);
+                        return;
+                    }
+
+                    if (data.type === 'auth') {
+                        console.log("[WebSocketService] Auth Response:", data);
+                        if (data.status === 'success' && this.authResolve) {
+                            this.authResolve(true);
+                            this.authResolve = null; // Clear
+                        }
                         return;
                     }
 

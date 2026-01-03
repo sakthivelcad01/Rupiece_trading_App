@@ -50,8 +50,9 @@ export default function MarketScreen({ navigation }) {
         setLoading(true);
         try {
             // 1. Fetch Indices
-            const indexKeys = Object.values(INSTRUMENT_KEYS);
-            const quotes = await MarketService.getQuotes(indexKeys);
+
+            const quotes = await MarketService.getQuotes(Object.values(INSTRUMENT_KEYS));
+            console.log("[MarketScreen] Indices Quotes:", JSON.stringify(quotes));
 
             const newIndicesData = {};
             Object.keys(INSTRUMENT_KEYS).forEach(key => {
@@ -193,6 +194,7 @@ export default function MarketScreen({ navigation }) {
     // 2. Fetch Option Contracts (Static List)
     useEffect(() => {
         let mounted = true;
+        setOptionChain([]); // CLEAR STALE DATA IMMEDIATELY
         const loadContracts = async () => {
             setLoading(true);
             try {

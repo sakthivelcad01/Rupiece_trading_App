@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext } from 'react';
-import { collection, query, where, getDocs, onSnapshot, or } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, or, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../../firebaseConfig';
 import { webSocketService } from '../services/WebSocketService';
@@ -131,19 +131,13 @@ export const AuthProvider = ({ children }) => {
                     await AsyncStorage.setItem(`sessionId_${user.uid}`, localSessionId);
 
                     // Update Firestore (User Just Logged In)
-                    await import('firebase/firestore').then(({ setDoc, doc, serverTimestamp }) => {
-                        setDoc(doc(db, "rupiecemain", user.uid), {
-                            sessionId: localSessionId,
-                            lastLogin: serverTimestamp()
-                        }, { merge: true });
-                    });
+                    await setDoc(doc(db, "rupiecemain", user.uid), {
+                        sessionId: localSessionId,
+                        lastLogin: serverTimestamp()
+                    }, { merge: true });
                 }
 
                 // 3. Listen to Firestore for Remote Changes
-                const docRef = import('firebase/firestore').then(({ doc }) => doc(db, "rupiecemain", user.uid));
-
-                // Note: handling async import inside effect is tricky, assuming db/doc available from imports at top
-                // Re-using top-level imports for cleaner code
                 const userDocRef = doc(db, "rupiecemain", user.uid);
 
                 sessionUnsub = onSnapshot(userDocRef, async (snapshot) => {
@@ -193,12 +187,10 @@ export const AuthProvider = ({ children }) => {
             await AsyncStorage.setItem(`sessionId_${user.uid}`, newSessionId);
 
             // 2. Update Firestore (Force other devices out)
-            await import('firebase/firestore').then(({ setDoc, doc, serverTimestamp }) => {
-                setDoc(doc(db, "rupiecemain", user.uid), {
-                    sessionId: newSessionId,
-                    lastLogin: serverTimestamp()
-                }, { merge: true });
-            });
+            await setDoc(doc(db, "rupiecemain", user.uid), {
+                sessionId: newSessionId,
+                lastLogin: serverTimestamp()
+            }, { merge: true });
 
             return true;
         } catch (err) {
