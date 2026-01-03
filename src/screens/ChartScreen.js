@@ -271,7 +271,15 @@ export default function ChartScreen({ route, navigation }) {
         default: range = '1d'; interval = '5m';
       }
 
-      const result = await MarketService.getYahooCandles(getYahooSymbol(symbol), range, interval);
+      let result;
+
+      // Prefer Upstox if instrumentKey available
+      if (instrumentKey) {
+        result = await MarketService.getCandles(instrumentKey, timeframe, range);
+      } else {
+        // Fallback to Yahoo
+        result = await MarketService.getYahooCandles(getYahooSymbol(symbol), range, interval);
+      }
 
       if (result.error) {
         setErrorMsg(result.error);
