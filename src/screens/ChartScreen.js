@@ -7,8 +7,8 @@ import { WebView } from 'react-native-webview';
 import { MarketService } from '../services/MarketService';
 import { useTheme } from '../context/ThemeContext';
 
-const { width } = Dimensions.get('window');
-const CHART_HEIGHT = 350;
+const { width, height } = Dimensions.get('window');
+const CHART_HEIGHT = height * 0.65; // Make chart occupy ~65% of screen height
 const ALL_TIMEFRAMES = ['1m', '2m', '5m', '15m', '30m', '1H', '2H', '3H', '4H', '1D', '1W', '1M', '1Y', '5Y'];
 
 const CHART_HTML = `
@@ -464,30 +464,7 @@ export default function ChartScreen({ route, navigation }) {
           )}
         </View>
 
-        <View style={dynamicStyles.separator} />
 
-        {/* OHLC Table */}
-        <View style={dynamicStyles.tableSection}>
-          <Text style={dynamicStyles.tableHeader}>Last 5 Days OHLC</Text>
-          <View style={dynamicStyles.tableRowHeader}>
-            <Text style={[dynamicStyles.col, { flex: 2, textAlign: 'left' }]}>Date</Text>
-            <Text style={dynamicStyles.col}>Open</Text>
-            <Text style={dynamicStyles.col}>High</Text>
-            <Text style={dynamicStyles.col}>Low</Text>
-            <Text style={dynamicStyles.col}>Close</Text>
-          </View>
-          {dailyData.map((row, idx) => (
-            <View key={idx} style={dynamicStyles.tableRow}>
-              <Text style={[dynamicStyles.cell, { flex: 2, textAlign: 'left', color: colors.subText }]}>
-                {row.date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
-              </Text>
-              <Text style={dynamicStyles.cell}>{row.open.toFixed(0)}</Text>
-              <Text style={dynamicStyles.cell}>{row.high.toFixed(0)}</Text>
-              <Text style={dynamicStyles.cell}>{row.low.toFixed(0)}</Text>
-              <Text style={dynamicStyles.cell}>{row.close.toFixed(0)}</Text>
-            </View>
-          ))}
-        </View>
 
         {/* Disclaimer */}
         <View style={{ padding: 16, alignItems: 'center', marginBottom: 20 }}>
