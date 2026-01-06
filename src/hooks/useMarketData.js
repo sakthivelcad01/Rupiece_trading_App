@@ -29,7 +29,6 @@ export function useMarketData(instrumentKeys) {
                         hasChanges = true;
                     }
                 });
-                console.log('[DEBUG] Market data update:', next)
 
                 return hasChanges ? next : prev;
             });
