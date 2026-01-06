@@ -134,6 +134,11 @@ class WebSocketService {
                 try {
                     // console.log("[WebSocketService] Raw Event Data:", event.data);
                     const data = JSON.parse(event.data);
+                    // console.log("[WebSocketService] Received:", data.type); 
+
+                    if (data.type === 'response') {
+                        console.log(`[WebSocketService] Response received for Req: ${data.requestId} | Error: ${data.error}`);
+                    }
 
                     if (data.type === 'pong') {
                         console.log("[WebSocketService] PONG received. Token Available:", data.tokenAvailable);
