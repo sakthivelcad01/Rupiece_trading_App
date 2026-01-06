@@ -338,9 +338,17 @@ export default function MarketScreen({ navigation }) {
         console.log(`[MarketDebug] processContracts Complete.`);
     };
 
-    // Initial Fetch (REST via Proxy) to get OHLC/Change data immediately
+    // Initial Fetch (REST via Proxy) to get OHLC/Change data immediately + Polling Fallback
     useEffect(() => {
         fetchMarketData();
+
+        // Auto-Refresh every 1 Minute (60s) as fallback for stuck WS
+        const interval = setInterval(() => {
+            console.log("[MarketScreen] Auto-Refreshing Data (1m)...");
+            fetchMarketData();
+        }, 60000);
+
+        return () => clearInterval(interval);
     }, []); // Run once on mount
 
     const dynamicStyles = styles(colors);
