@@ -90,7 +90,9 @@ export function useOrderMonitor() {
     const liveData = useMarketData(monitorKeys);
 
     // Trigger Logic whenever liveData updates
+    // Trigger Logic whenever liveData updates
     useEffect(() => {
+        if (!user || !selectedAccount) return; // Prevent crash on logout
         if (monitorKeys.length === 0) return;
         if (isProcessing) return; // Prevent re-entry
 
