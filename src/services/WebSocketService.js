@@ -137,7 +137,13 @@ class WebSocketService {
                     // console.log("[WebSocketService] Received:", data.type); 
 
                     if (data.type === 'response') {
-                        console.log(`[WebSocketService] Response received for Req: ${data.requestId} | Error: ${data.error}`);
+                        const keys = data.data ? Object.keys(data.data) : [];
+                        console.log(`[WebSocketService] Response received for Req: ${data.requestId} | Error: ${data.error} | Keys: ${keys.length} (${keys.slice(0, 3)})`);
+                    }
+
+                    if (data.type === 'update' && data.feeds) {
+                        const count = Object.keys(data.feeds).length;
+                        if (count > 0) console.log(`[WebSocketService] Stream Update: ${count} ticks.`);
                     }
 
                     if (data.type === 'pong') {
