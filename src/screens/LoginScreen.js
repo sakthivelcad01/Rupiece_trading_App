@@ -119,6 +119,7 @@ export default function LoginScreen() {
                         </TouchableOpacity>
                     )}
                 </View>
+                <Text style={{ textAlign: 'center', color: '#333', marginTop: 20, fontSize: 10 }}>v1.0.1 (OTA Verified)</Text>
             </KeyboardAvoidingView>
         </SafeAreaView>
     );
