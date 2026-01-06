@@ -30,12 +30,10 @@ class WebSocketService {
             // 1. Get Fresh Firebase ID Token for Server Auth
             if (!auth.currentUser) {
                 console.log("[WebSocketService] No User Logged In, cannot relay token.");
-                return;
+                return false;
             }
 
             const idToken = await auth.currentUser.getIdToken(true);
-
-            // 2. Get Upstox Access Token DB Config (existing logic)
 
             // 2. Get Upstox Access Token DB Config (Try/Catch to be robust against Permission Errors)
             let upstoxToken = null;
@@ -57,9 +55,11 @@ class WebSocketService {
                 upstoxToken: upstoxToken, // Relay for Proxy Calls
                 uid: auth.currentUser.uid
             });
+            return true;
 
         } catch (e) {
             console.error("[WebSocketService] Token Relay Failed (Critical):", e);
+            return false;
         }
     }
 
@@ -97,30 +97,36 @@ class WebSocketService {
             this.socket.onopen = async () => {
                 console.log("[WebSocketService] SUCCESS: Connected to Server at", this.socketUrl);
                 // 1. Send Auth / Relay Token
-                await this.relayToken();
+                const authAttempted = await this.relayToken();
 
-                // 2. Wait for Server to Verify Token (Handshake)
-                console.log("[WebSocketService] Waiting for Server Auth Verification...");
-                // await new Promise(resolve => setTimeout(resolve, 5000));
+                if (authAttempted) {
+                    // 2. Wait for Server to Verify Token (Handshake)
+                    console.log("[WebSocketService] Waiting for Server Auth Verification...");
 
-                // Allow up to 10s for auth
-                const authPromise = new Promise(resolve => {
-                    this.authResolve = resolve;
-                });
+                    // Allow up to 10s for auth
+                    const authPromise = new Promise(resolve => {
+                        this.authResolve = resolve;
+                    });
 
-                // Race a timeout
-                const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(false), 10000));
+                    // Race a timeout
+                    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(false), 10000));
 
-                const authSuccess = await Promise.race([authPromise, timeoutPromise]);
+                    const authSuccess = await Promise.race([authPromise, timeoutPromise]);
 
-                if (authSuccess) {
-                    console.log("[WebSocketService] Connected & Authenticated (Verified).");
-                    this.isConnected = true;
-                    // 3. Resubscribe to any cached keys
-                    this.resubscribe();
+                    if (authSuccess) {
+                        console.log("[WebSocketService] Connected & Authenticated (Verified).");
+                        this.isConnected = true;
+                        // 3. Resubscribe to any cached keys
+                        this.resubscribe();
+                    } else {
+                        console.error("[WebSocketService] Auth Handshake Timed Out!");
+                        this.socket.close(); // Retry
+                    }
                 } else {
-                    console.error("[WebSocketService] Auth Handshake Timed Out!");
-                    this.socket.close(); // Retry
+                    // No User Logged in, treat as Connected (Unauthenticated)
+                    console.log("[WebSocketService] Connected (Unauthenticated / No User).");
+                    this.isConnected = true;
+                    this.resubscribe();
                 }
             };
 
