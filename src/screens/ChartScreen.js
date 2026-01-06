@@ -202,7 +202,7 @@ export default function ChartScreen({ route, navigation }) {
       NIFTY: '^NSEI',
       BANKNIFTY: '^NSEBANK',
       FINNIFTY: 'NIFTY_FIN_SERVICE.NS',
-      MIDCAP: '^NSEMDCP50',
+      MIDCPNIFTY: '^NSEMDCP50',
       SENSEX: '^BSESN',
       BANKEX: '^BSEBANK'
     };

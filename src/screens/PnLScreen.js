@@ -12,8 +12,7 @@ const LOT_SIZES = {
     'NIFTY': 65,
     'BANKNIFTY': 30,
     'FINNIFTY': 65,
-    'MIDCPNIFTY': 75,
-    'MIDCAP': 120, // Match backend
+    'MIDCPNIFTY': 120,
     'SENSEX': 20,
     'BANKEX': 30,
     'DEFAULT': 1
@@ -26,7 +25,6 @@ const getLotSize = (symbol, itemLotSize) => {
     if (upper.includes('BANKNIFTY')) return LOT_SIZES.BANKNIFTY;
     if (upper.includes('FINNIFTY')) return LOT_SIZES.FINNIFTY;
     if (upper.includes('MIDCPNIFTY')) return LOT_SIZES.MIDCPNIFTY;
-    if (upper.includes('MIDCAP')) return LOT_SIZES.MIDCAP;
     if (upper.includes('NIFTY')) return LOT_SIZES.NIFTY;
     if (upper.includes('SENSEX')) return LOT_SIZES.SENSEX;
     if (upper.includes('BANKEX')) return LOT_SIZES.BANKEX;
@@ -40,7 +38,7 @@ const PositionCard = ({ item, onExit, onAddSLTP, colors }) => {
     return (
         <View style={styles(colors).card}>
             <View style={styles(colors).cardHeader}>
-                <Text style={styles(colors).symbolText}>{item.symbol} {item.strike} {item.type}</Text>
+                <Text style={styles(colors).symbolText}>{item.symbol}</Text>
                 <View style={{ flexDirection: 'row', gap: 4 }}>
                     <Text style={[styles(colors).productTag, { backgroundColor: item.product === 'INTRADAY' ? colors.warning + '40' : colors.primary + '40', color: colors.text }]}>
                         {item.product === 'INTRADAY' ? 'MIS' : 'NRML'}

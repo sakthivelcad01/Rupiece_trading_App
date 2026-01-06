@@ -9,7 +9,7 @@ const INSTRUMENT_KEYS = {
     NIFTY: 'NSE_INDEX|Nifty 50',
     BANKNIFTY: 'NSE_INDEX|Nifty Bank',
     FINNIFTY: 'NSE_INDEX|Nifty Fin Service',
-    MIDCAP: 'NSE_INDEX|NIFTY MID SELECT',
+    MIDCPNIFTY: 'NSE_INDEX|NIFTY MID SELECT',
     SENSEX: 'BSE_INDEX|SENSEX',
     BANKEX: 'BSE_INDEX|BANKEX'
 };
@@ -91,7 +91,7 @@ export default function MarketScreen({ navigation }) {
                 let step = 50;
                 if (selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' || selectedIndex === 'BANKEX') {
                     step = 100;
-                } else if (selectedIndex === 'MIDCAP') {
+                } else if (selectedIndex === 'MIDCPNIFTY') {
                     step = 25;
                 }
 
@@ -272,7 +272,7 @@ export default function MarketScreen({ navigation }) {
 
         let step = 50;
         if (selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' || selectedIndex === 'BANKEX') step = 100;
-        else if (selectedIndex === 'MIDCAP') step = 25;
+        else if (selectedIndex === 'MIDCPNIFTY') step = 25;
 
         // Note: We need a valid currentPrice. If we don't have it yet, we might render centered on 0 or wait?
         // Let's assume we use the first fetched price or 0.

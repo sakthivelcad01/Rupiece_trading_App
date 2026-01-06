@@ -1,5 +1,7 @@
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
+import * as Updates from 'expo-updates';
+import { Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -88,6 +90,29 @@ function NavigationRoot() {
 import { ThemeProvider } from './src/context/ThemeContext';
 
 export default function App() {
+  React.useEffect(() => {
+    async function checkUpdates() {
+      try {
+        if (__DEV__) return; // Don't check in dev mode
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          Alert.alert(
+            "Update Available",
+            "A new version is ready. Restart to apply?",
+            [
+              { text: "Later" },
+              { text: "Restart", onPress: () => Updates.reloadAsync() }
+            ]
+          );
+        }
+      } catch (e) {
+        console.log("Update Check Error:", e);
+      }
+    }
+    checkUpdates();
+  }, []);
+
   return (
     <ErrorBoundary>
       <SafeAreaProvider>

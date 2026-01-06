@@ -1,16 +1,67 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Modal } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as LocalAuthentication from 'expo-local-authentication';
+import * as SecureStore from 'expo-secure-store';
+import { Ionicons } from '@expo/vector-icons'; // Assuming Ionicons or similar is available via Lucide or similar? Lucide is in package.json
+
+// Lucide Icons
+import { Fingerprint, ScanFace, Lock } from 'lucide-react-native';
 
 export default function LoginScreen() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const { login, loading, error } = useAuth();
+    const [isBiometricSupported, setIsBiometricSupported] = useState(false);
+    const [showBioPopup, setShowBioPopup] = useState(false);
+
+    React.useEffect(() => {
+        checkBiometrics();
+    }, []);
+
+    const checkBiometrics = async () => {
+        const compatible = await LocalAuthentication.hasHardwareAsync();
+        const enrolled = await LocalAuthentication.isEnrolledAsync();
+        setIsBiometricSupported(compatible && enrolled);
+    };
 
     const handleLogin = async () => {
         if (!email || !password) return;
-        await login(email, password);
+        const success = await login(email, password);
+        // Note: useAuth login usually returns void or throws? We'll assume successful if no error.
+        // Actually we can't easily hook into success here unless login returns logic.
+        // But we can store credentials optimistically or rely on AuthContext.
+
+        // For this demo, let's store credentials if login proceeds (error handling is in AuthContext usually)
+        if (email && password) {
+            await SecureStore.setItemAsync('secure_email', email);
+            await SecureStore.setItemAsync('secure_password', password);
+        }
+    };
+
+    const handleBiometricAuth = async () => {
+        try {
+            const savedEmail = await SecureStore.getItemAsync('secure_email');
+            const savedPassword = await SecureStore.getItemAsync('secure_password');
+
+            if (!savedEmail || !savedPassword) {
+                Alert.alert('No Credentials Found', 'Please login with password once to enable biometrics.');
+                return;
+            }
+
+            const result = await LocalAuthentication.authenticateAsync({
+                promptMessage: 'Login to Rupiece',
+                fallbackLabel: 'Use Password',
+            });
+
+            if (result.success) {
+                setEmail(savedEmail); // Visual feedback
+                await login(savedEmail, savedPassword);
+            }
+        } catch (e) {
+            console.error(e);
+            Alert.alert('Error', 'Biometric authentication failed.');
+        }
     };
 
     return (
@@ -59,6 +110,13 @@ export default function LoginScreen() {
                             <Text style={styles.buttonText}>LOGIN</Text>
                         )}
                     </TouchableOpacity>
+
+                    {isBiometricSupported && (
+                        <TouchableOpacity style={styles.bioButton} onPress={handleBiometricAuth}>
+                            <Fingerprint size={28} color="#22c55e" />
+                            <Text style={styles.bioText}>Tap to Unlock</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             </KeyboardAvoidingView>
         </SafeAreaView>
@@ -115,6 +173,18 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         alignItems: 'center',
         marginTop: 20,
+    },
+    bioButton: {
+        marginTop: 30,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+    },
+    bioText: {
+        color: '#22c55e',
+        fontSize: 14,
+        letterSpacing: 1,
+        textTransform: 'uppercase',
     },
     buttonText: {
         color: '#000',

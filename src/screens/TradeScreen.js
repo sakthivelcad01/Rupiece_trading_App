@@ -13,8 +13,7 @@ const LOT_SIZES = {
     'NIFTY': 65,
     'BANKNIFTY': 30,
     'FINNIFTY': 65,
-    'MIDCPNIFTY': 75,
-    'MIDCAP': 120,
+    'MIDCPNIFTY': 120,
     'SENSEX': 20,
     'BANKEX': 30,
     'DEFAULT': 1
@@ -29,25 +28,46 @@ export default function TradeScreen({ route, navigation }) {
     const { user, selectedAccount, setSelectedAccount } = useAuth();
     const { showAlert } = useAlert();
 
-    const getLotSize = () => {
-        // 1. Priority: Live Quote Data
-        if (quote && (quote.lot_size || quote.lotSize)) {
-            return quote.lot_size || quote.lotSize;
-        }
-        // 2. Route Params
-        if (lotSize) return lotSize;
-
-        // 3. Fallback: Static Map
+    const getStaticLotSize = () => {
         if (!symbol) return LOT_SIZES.DEFAULT;
         const upper = symbol.toUpperCase();
         if (upper.includes('BANKNIFTY')) return LOT_SIZES.BANKNIFTY;
         if (upper.includes('FINNIFTY')) return LOT_SIZES.FINNIFTY;
         if (upper.includes('MIDCPNIFTY')) return LOT_SIZES.MIDCPNIFTY;
-        if (upper.includes('MIDCAP')) return LOT_SIZES.MIDCAP;
         if (upper.includes('NIFTY')) return LOT_SIZES.NIFTY;
         if (upper.includes('SENSEX')) return LOT_SIZES.SENSEX;
         if (upper.includes('BANKEX')) return LOT_SIZES.BANKEX;
         return LOT_SIZES.DEFAULT;
+    };
+
+    const getLotSize = () => {
+        // Priority for Exit Mode: checks which lot size cleanly divides the exitQty
+        if (exitQty) {
+            const live = quote?.lot_size || quote?.lotSize;
+            const param = lotSize; // passed from route
+            const staticSize = getStaticLotSize();
+
+            // 1. Try Param (Stored in Position)
+            if (param && exitQty % param === 0) return param;
+
+            // 2. Try Live (Current Market) - Only if it matches the quantity structure
+            if (live && exitQty % live === 0) return live;
+
+            // 3. Try Static (Fallback)
+            if (staticSize && exitQty % staticSize === 0) return staticSize;
+
+            // 4. Default Fallbacks (if nothing fits cleanly)
+            // Prefer Param -> Live -> Static
+            console.log(`[TradeScreen] Lot Size Mismatch for Exit. Qty: ${exitQty}. Live: ${live}, Static: ${staticSize}`);
+            return param || live || staticSize || 1;
+        }
+
+        // Entry Mode: Prioritize Live Data
+        if (quote && (quote.lot_size || quote.lotSize)) {
+            return quote.lot_size || quote.lotSize;
+        }
+        if (lotSize) return lotSize;
+        return getStaticLotSize();
     };
 
     const LOT_SIZE = getLotSize();
@@ -60,16 +80,13 @@ export default function TradeScreen({ route, navigation }) {
         return 1;
     });
 
-    // When Quote Loads -> Check if LOT_SIZE changed -> Update Lots for Exit Mode
+    // When LOT_SIZE changes (due to quote load or logic update), update lots for Exit Mode
     useEffect(() => {
-        if (quote && exitQty) {
-            const liveLotSize = quote.lot_size || quote.lotSize;
-            if (liveLotSize && liveLotSize !== lotSize) {
-                console.log("Correcting Lot Size from Live Data:", liveLotSize);
-                setLots(Math.ceil(exitQty / liveLotSize));
-            }
+        if (exitQty) {
+            // Recalculate lots based on the determined LOT_SIZE
+            setLots(Math.ceil(exitQty / LOT_SIZE));
         }
-    }, [quote, exitQty]); // Dependency on quote ensures this runs when data arrives
+    }, [exitQty, LOT_SIZE]);
 
     const [loading, setLoading] = useState(false);
     const [placingOrder, setPlacingOrder] = useState(false);
