@@ -1,9 +1,7 @@
 import React, { createContext, useState, useContext } from 'react';
-import { collection, query, where, getDocs, onSnapshot, or, doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { auth, db } from '../../firebaseConfig';
+import { Alert } from 'react-native';
+import { supabase } from '../services/SupabaseService';
 import { webSocketService } from '../services/WebSocketService';
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const AuthContext = createContext(null);
@@ -17,68 +15,78 @@ export const AuthProvider = ({ children }) => {
 
     // Listen for auth state changes
     React.useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-            setUser(user);
-            if (!user) {
+        // Check current session first
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setUser(session?.user ?? null);
+            if (!session?.user) {
+                setLoading(false);
+            }
+        });
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            const currentUser = session?.user ?? null;
+            setUser(currentUser);
+
+            if (!currentUser) {
                 setSelectedAccount(null);
                 setAccounts([]);
                 setLoading(false);
             }
         });
-        return unsubscribe;
+
+        return () => subscription.unsubscribe();
     }, []);
 
     // Fetch Accounts & Restore Selection when User is set
     React.useEffect(() => {
-        if (!user || !auth.currentUser) return;
+        if (!user) return;
 
-        let unsub = () => { };
-        let timer = null;
+        let channel = null;
 
         const fetchAccounts = async () => {
             try {
-                // Query: userId == user.uid OR email == user.email
-                const constraints = [where("userId", "==", user.uid)];
-                if (user.email) constraints.push(where("email", "==", user.email));
+                // Initial Fetch
+                const { data: userAccounts, error: fetchError } = await supabase
+                    .from('accounts')
+                    .select('*')
+                    .eq('userId', user.id);
 
-                const q = query(collection(db, "challenges"), or(...constraints));
+                if (fetchError) throw fetchError;
 
-                // Real-time listener for accounts (with brief delay for Auth sync)
-                timer = setTimeout(() => {
-                    unsub = onSnapshot(q, async (snapshot) => {
-                        const userAccounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        console.log(`[AuthContext] Accounts fetched: ${userAccounts.length}. UID: ${user.uid}`);
-                        setAccounts(userAccounts);
+                console.log(`[AuthContext] Accounts fetched: ${userAccounts?.length || 0}. UID: ${user.id}`);
+                setAccounts(userAccounts || []);
 
-                        // Restore Selection
-                        const lastId = await AsyncStorage.getItem(`lastAccount_${user.uid}`);
+                // Restore Selection
+                const lastId = await AsyncStorage.getItem(`lastAccount_${user.id}`);
 
-                        // If we have a currently selected account, update it with live data
-                        // If not, try to restore from storage, or default to first
+                setSelectedAccount(prev => {
+                    if (prev) {
+                        const found = userAccounts?.find(a => a.id === prev.id);
+                        return found || userAccounts?.[0] || null;
+                    }
+                    if (lastId) {
+                        const found = userAccounts?.find(a => a.id === lastId);
+                        if (found) return found;
+                    }
+                    return userAccounts?.length > 0 ? userAccounts[0] : null;
+                });
 
-                        setSelectedAccount(prev => {
-                            // 1. If we already have a selection, find the updated version of it
-                            if (prev) {
-                                const found = userAccounts.find(a => a.id === prev.id);
-                                return found || userAccounts[0] || null;
-                            }
+                setLoading(false);
 
-                            // 2. If no selection (first load), try Storage
-                            if (lastId) {
-                                const found = userAccounts.find(a => a.id === lastId);
-                                if (found) return found;
-                            }
-
-                            // 3. Fallback to first
-                            return userAccounts.length > 0 ? userAccounts[0] : null;
-                        });
-
-                        setLoading(false);
-                    }, (err) => {
-                        console.error("AuthContext: Error fetching accounts", err);
-                        setLoading(false);
-                    });
-                }, 500);
+                // Real-time listener for "accounts" table changes for this user
+                // Subscribe to changes where userId matches
+                channel = supabase.channel(`public:accounts:userId=eq.${user.id}`)
+                    .on(
+                        'postgres_changes',
+                        { event: '*', schema: 'public', table: 'accounts', filter: `userId=eq.${user.id}` },
+                        (payload) => {
+                            console.log('Account change received!', payload);
+                            // Re-fetch to be safe and simple, or handle merge logic
+                            // For simplicity, re-fetching entire list is robust
+                            refreshAccounts();
+                        }
+                    )
+                    .subscribe();
 
             } catch (err) {
                 console.error("AuthContext: Setup Error", err);
@@ -86,21 +94,31 @@ export const AuthProvider = ({ children }) => {
             }
         };
 
+        const refreshAccounts = async () => {
+            const { data: userAccounts } = await supabase
+                .from('accounts')
+                .select('*')
+                .eq('userId', user.id);
+            if (userAccounts) {
+                setAccounts(userAccounts);
+                // logic to maintain selected account could go here if needed
+            }
+        };
+
         fetchAccounts();
+
         return () => {
-            clearTimeout(timer);
-            unsub();
+            if (channel) supabase.removeChannel(channel);
         };
     }, [user]);
 
-    // WebSocket Connection Management (Local Server)
+    // WebSocket Connection Management
     React.useEffect(() => {
         let pingInterval = null;
         if (user) {
             console.log("[Auth] User logged in, connecting to Market Data Server...");
             webSocketService.connect();
 
-            // Setup diagnostic ping
             pingInterval = setInterval(() => {
                 if (webSocketService.isConnected) {
                     webSocketService.send({ type: 'ping' });
@@ -114,44 +132,44 @@ export const AuthProvider = ({ children }) => {
         };
     }, [user]);
 
-    // Session Security Logic
+    // Session Security Logic (Single Session)
     React.useEffect(() => {
         if (!user) return;
 
-        let sessionUnsub = () => { };
+        let sessionChannel = null;
 
         const setupSession = async () => {
             try {
                 // 1. Get Local Session ID
-                let localSessionId = await AsyncStorage.getItem(`sessionId_${user.uid}`);
+                let localSessionId = await AsyncStorage.getItem(`sessionId_${user.id}`);
 
-                // 2. If no local session (first run or fresh login), create one
+                // 2. If no local session, create one
                 if (!localSessionId) {
                     localSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
-                    await AsyncStorage.setItem(`sessionId_${user.uid}`, localSessionId);
+                    await AsyncStorage.setItem(`sessionId_${user.id}`, localSessionId);
 
-                    // Update Firestore (User Just Logged In)
-                    await setDoc(doc(db, "rupiecemain", user.uid), {
+                    // Update Supabase Profiles
+                    await supabase.from('profiles').upsert({
+                        id: user.id,
                         sessionId: localSessionId,
-                        lastLogin: serverTimestamp()
-                    }, { merge: true });
+                        lastLogin: new Date().toISOString()
+                    });
                 }
 
-                // 3. Listen to Firestore for Remote Changes
-                const userDocRef = doc(db, "rupiecemain", user.uid);
-
-                sessionUnsub = onSnapshot(userDocRef, async (snapshot) => {
-                    if (snapshot.exists()) {
-                        const data = snapshot.data();
-                        const remoteSessionId = data.sessionId;
-
-                        if (remoteSessionId && remoteSessionId !== localSessionId) {
-                            console.log("[Auth] Session Mismatch! Remote:", remoteSessionId, "Local:", localSessionId);
-                            // Mismatch! Log out.
-                            await logout(true); // Pass true to indicate forced logout
+                // 3. Listen to Profile Changes
+                sessionChannel = supabase.channel(`public:profiles:${user.id}`)
+                    .on(
+                        'postgres_changes',
+                        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+                        async (payload) => {
+                            const newSessionId = payload.new.sessionId;
+                            if (newSessionId && newSessionId !== localSessionId) {
+                                console.log("[Auth] Session Mismatch! Remote:", newSessionId, "Local:", localSessionId);
+                                await logout(true);
+                            }
                         }
-                    }
-                });
+                    )
+                    .subscribe();
 
             } catch (err) {
                 console.error("Session Setup Error:", err);
@@ -161,7 +179,7 @@ export const AuthProvider = ({ children }) => {
         setupSession();
 
         return () => {
-            sessionUnsub();
+            if (sessionChannel) supabase.removeChannel(sessionChannel);
         };
     }, [user]);
 
@@ -169,7 +187,7 @@ export const AuthProvider = ({ children }) => {
     const handleSetSelectedAccount = async (account) => {
         setSelectedAccount(account);
         if (user && account) {
-            await AsyncStorage.setItem(`lastAccount_${user.uid}`, account.id);
+            await AsyncStorage.setItem(`lastAccount_${user.id}`, account.id);
         }
     };
 
@@ -177,38 +195,36 @@ export const AuthProvider = ({ children }) => {
         setLoading(true);
         setError(null);
         try {
-            const result = await signInWithEmailAndPassword(auth, email, password);
-            const user = result.user;
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
+
+            if (error) throw error;
+
+            const user = data.user;
 
             // Generate New Session ID
             const newSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
 
             // 1. Save Local
-            await AsyncStorage.setItem(`sessionId_${user.uid}`, newSessionId);
+            await AsyncStorage.setItem(`sessionId_${user.id}`, newSessionId);
 
-            // 2. Update Firestore (Force other devices out)
-            await setDoc(doc(db, "rupiecemain", user.uid), {
+            // 2. Update Supabase Profile (Force other devices out)
+            await supabase.from('profiles').upsert({
+                id: user.id,
                 sessionId: newSessionId,
-                lastLogin: serverTimestamp()
-            }, { merge: true });
+                lastLogin: new Date().toISOString()
+            });
 
             return true;
         } catch (err) {
+            console.error("Login Error", err);
             let msg = err.message;
-            if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-                msg = "Invalid Email or Password";
-            } else if (err.code === 'auth/invalid-email') {
-                msg = "Invalid Email Address Format";
-            } else if (err.code === 'auth/too-many-requests') {
-                msg = "Too many failed attempts. Please try again later.";
-            } else if (err.code === 'auth/network-request-failed') {
-                msg = "Network Error. Please check your internet.";
-            }
+            if (msg.includes("Invalid login credentials")) msg = "Invalid Email or Password";
             setError(msg);
             setLoading(false);
             return false;
-        } finally {
-            // handled by listener
         }
     };
 
@@ -216,25 +232,20 @@ export const AuthProvider = ({ children }) => {
         try {
             setLoading(true);
 
-            // Clear Local Session
             if (user) {
-                await AsyncStorage.removeItem(`sessionId_${user.uid}`);
-                await AsyncStorage.removeItem(`lastAccount_${user.uid}`);
+                await AsyncStorage.removeItem(`sessionId_${user.id}`);
+                await AsyncStorage.removeItem(`lastAccount_${user.id}`);
             }
 
-            await signOut(auth);
+            await supabase.auth.signOut();
 
             setSelectedAccount(null);
             setAccounts([]);
             setError(null);
 
             if (isForced) {
-                // We can't easily show an alert from Context without a Ref or Service
-                // But setting Error might show it on Login Screen if redirected?
-                // Ideally, use AlertContext if available here, or a simple Alert
                 setTimeout(() => {
-                    // Simple alert might crash if app is in background, but okay for active use
-                    alert("Session Expired: You have been logged out because you logged in on another device.");
+                    Alert.alert("Session Expired", "You have been logged out because you logged in on another device.");
                 }, 500);
             }
 
