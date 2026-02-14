@@ -1,4 +1,4 @@
-import { supabase } from './SupabaseService';
+import { supabase } from '../../supabaseConfig';
 import { MarketService } from './MarketService';
 import { API_URL } from '../config/ApiConfig';
 
@@ -35,8 +35,8 @@ export const OrderService = {
 
             // Get Auth Token
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) throw "User not authenticated";
-            const authToken = session.access_token;
+            const authToken = session?.access_token;
+            if (!authToken) throw "User not authenticated";
 
             console.log(`[OrderService] Placing Order to: ${API_URL}/placeOrder`);
 
@@ -87,7 +87,7 @@ export const OrderService = {
             if (error) throw error;
             return data || [];
         } catch (error) {
-            console.error("Fetch Positions Error:", error);
+            console.error("Fetch Positions Error:", error.message);
             return [];
         }
     },
@@ -105,12 +105,12 @@ export const OrderService = {
                 .select('*')
                 .eq('accountId', accountId)
                 .eq('userId', user.id)
-                .order('timestamp', { ascending: false });
+                .order('timestamp', { ascending: false }); // Assuming timestamp column exists, else createdAt
 
             if (error) throw error;
             return data || [];
         } catch (error) {
-            console.error("Fetch Orders Error:", error);
+            console.error("Fetch Orders Error:", error.message);
             return [];
         }
     },
@@ -133,7 +133,7 @@ export const OrderService = {
             if (error) throw error;
             return data || [];
         } catch (error) {
-            console.error("Fetch Trades Error:", error);
+            console.error("Fetch Trades Error:", error.message);
             return [];
         }
     },
@@ -145,14 +145,10 @@ export const OrderService = {
     updateEndOfDayStats: async (accountId) => {
         try {
             // Simplified: Just log for now as strict transaction support requires server side code
-            // ideally we call an RPC here
             console.warn("[OrderService] updateEndOfDayStats - Not fully implemented on client pending server RPC");
 
             // 1. Get Positions
-            const positions = await OrderService.getPositions(accountId);
-
-            // ... (Logic same as before but need separate update calls or RPC)
-            // For now we assume server handles this via cron or we implement a simple update
+            await OrderService.getPositions(accountId);
 
             return { success: true };
         } catch (err) {
@@ -173,7 +169,7 @@ export const OrderService = {
                 symbol: position.symbol,
                 qty: position.qty,
                 price: currentPrice,
-                type: 'SELL',   // Closing a Long Position (Assuming Long only for now)
+                type: 'SELL',   // Closing a Long Position
                 product: position.product || 'PAPER',
                 orderClass: 'MARKET',
                 expiry: position.expiry || '',
@@ -193,8 +189,8 @@ export const OrderService = {
     executeLimitOrder: async (orderId, fillPrice, account) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) throw "User not authenticated";
-            const authToken = session.access_token;
+            const authToken = session?.access_token;
+            if (!authToken) throw "User not authenticated";
 
             const response = await fetch(`${API_URL}/executeLimitOrder`, {
                 method: 'POST',
@@ -225,8 +221,8 @@ export const OrderService = {
     modifyPendingOrder: async (orderId, newPrice, newQty, account) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) throw "User not authenticated";
-            const authToken = session.access_token;
+            const authToken = session?.access_token;
+            if (!authToken) throw "User not authenticated";
 
             const response = await fetch(`${API_URL}/modifyOrder`, {
                 method: 'POST',
@@ -251,8 +247,8 @@ export const OrderService = {
     updatePositionSLTP: async (account, positionId, sl, tp) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) throw "User not authenticated";
-            const authToken = session.access_token;
+            const authToken = session?.access_token;
+            if (!authToken) throw "User not authenticated";
 
             const response = await fetch(`${API_URL}/updateSLTP`, {
                 method: 'POST',
@@ -277,8 +273,8 @@ export const OrderService = {
     cancelOrder: async (orderId, account) => {
         try {
             const { data: { session } } = await supabase.auth.getSession();
-            if (!session) throw "User not authenticated";
-            const authToken = session.access_token;
+            const authToken = session?.access_token;
+            if (!authToken) throw "User not authenticated";
 
             const response = await fetch(`${API_URL}/cancelOrder`, {
                 method: 'POST',
@@ -301,9 +297,13 @@ export const OrderService = {
      */
     simulateMarginCall: async (accountId) => {
         try {
-            // Fetch current
-            const { data: account, error } = await supabase.from('accounts').select('*').eq('id', accountId).single();
-            if (error) throw error;
+            const { data: account, error } = await supabase
+                .from('challenges')
+                .select('*')
+                .eq('id', accountId)
+                .single();
+
+            if (error || !account) throw "Account not found";
 
             const accountSize = account.accountSize || 1000000;
             const invested = account.investedAmount || 0;
@@ -311,10 +311,13 @@ export const OrderService = {
             const newBalance = targetEquity - invested;
 
             // Update
-            await supabase.from('accounts').update({
-                currentBalance: newBalance,
-                status: 'ongoing'
-            }).eq('id', accountId);
+            await supabase
+                .from('challenges')
+                .update({
+                    currentBalance: newBalance,
+                    status: 'ongoing'
+                })
+                .eq('id', accountId);
 
             return { success: true };
         } catch (err) {
@@ -328,17 +331,26 @@ export const OrderService = {
      */
     resetBalance: async (accountId) => {
         try {
-            const { data: account, error } = await supabase.from('accounts').select('*').eq('id', accountId).single();
-            if (error) throw error;
+            const { data: account, error } = await supabase
+                .from('challenges')
+                .select('*')
+                .eq('id', accountId)
+                .single();
+
+            if (error || !account) throw "Account not found";
+
             const accountSize = account.accountSize || 1000000;
 
-            await supabase.from('accounts').update({
-                currentBalance: accountSize,
-                investedAmount: 0,
-                status: 'ongoing',
-                currentProfit: 0,
-                currentLoss: 0
-            }).eq('id', accountId);
+            await supabase
+                .from('challenges')
+                .update({
+                    currentBalance: accountSize,
+                    investedAmount: 0,
+                    status: 'ongoing',
+                    currentProfit: 0,
+                    currentLoss: 0
+                })
+                .eq('id', accountId);
 
             return { success: true };
         } catch (err) {
@@ -348,7 +360,7 @@ export const OrderService = {
     },
 
     /**
-     * Checks for expired positions and auto-squares them off if multiple days of delivery
+     * Checks for expired positions and auto-squares them off
      */
     checkAndSquareOffExpiredPositions: async (account, userId) => {
         if (!account || !account.id) return;
@@ -371,7 +383,7 @@ export const OrderService = {
                             instrumentKey: pos.instrumentKey,
                             symbol: pos.symbol,
                             qty: pos.qty,
-                            price: pos.ltp || pos.avgPrice,
+                            price: pos.ltp || pos.avgPrice, // Note: LTP might be missing in object, falling back to Avg
                             type: pos.qty > 0 ? 'SELL' : 'BUY',
                             product: pos.product,
                             orderClass: 'MARKET',
@@ -403,7 +415,8 @@ export const OrderService = {
                 .eq('accountId', account.id)
                 .eq('status', 'PENDING');
 
-            if (error || !pendingOrders || pendingOrders.length === 0) return;
+            if (error) throw error;
+            if (!pendingOrders || pendingOrders.length === 0) return;
 
             // 2. Fetch Live Prices
             const keysToFetch = [...new Set(pendingOrders.map(o => o.instrumentKey))];
@@ -417,9 +430,7 @@ export const OrderService = {
                 if (!ltp) continue;
 
                 let shouldExecute = false;
-                // BUY hits if Market Price <= Limit Price
                 if (order.type === 'BUY' && ltp <= order.price) shouldExecute = true;
-                // SELL hits if Market Price >= Limit Price
                 else if (order.type === 'SELL' && ltp >= order.price) shouldExecute = true;
 
                 if (shouldExecute) {
@@ -432,7 +443,7 @@ export const OrderService = {
                 }
             }
         } catch (error) {
-            console.error("[LimitTrigger] Error checking pending orders:", error);
+            console.error("[LimitTrigger] Error checking pending orders:", error.message);
         }
     }
 };

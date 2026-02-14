@@ -1,6 +1,6 @@
 import React, { createContext, useState, useContext } from 'react';
 import { Alert } from 'react-native';
-import { supabase } from '../services/SupabaseService';
+import { supabase } from '../../supabaseConfig';
 import { webSocketService } from '../services/WebSocketService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -15,7 +15,7 @@ export const AuthProvider = ({ children }) => {
 
     // Listen for auth state changes
     React.useEffect(() => {
-        // Check current session first
+        // Check initial session
         supabase.auth.getSession().then(({ data: { session } }) => {
             setUser(session?.user ?? null);
             if (!session?.user) {
@@ -23,9 +23,9 @@ export const AuthProvider = ({ children }) => {
             }
         });
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-            const currentUser = session?.user ?? null;
-            setUser(currentUser);
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+            const currentUser = session?.user;
+            setUser(currentUser ?? null);
 
             if (!currentUser) {
                 setSelectedAccount(null);
@@ -46,12 +46,12 @@ export const AuthProvider = ({ children }) => {
         const fetchAccounts = async () => {
             try {
                 // Initial Fetch
-                const { data: userAccounts, error: fetchError } = await supabase
-                    .from('accounts')
+                const { data: userAccounts, error } = await supabase
+                    .from('challenges')
                     .select('*')
                     .eq('userId', user.id);
 
-                if (fetchError) throw fetchError;
+                if (error) throw error;
 
                 console.log(`[AuthContext] Accounts fetched: ${userAccounts?.length || 0}. UID: ${user.id}`);
                 setAccounts(userAccounts || []);
@@ -73,35 +73,30 @@ export const AuthProvider = ({ children }) => {
 
                 setLoading(false);
 
-                // Real-time listener for "accounts" table changes for this user
-                // Subscribe to changes where userId matches
-                channel = supabase.channel(`public:accounts:userId=eq.${user.id}`)
+                // Real-time Listener
+                channel = supabase.channel('public:challenges')
                     .on(
                         'postgres_changes',
-                        { event: '*', schema: 'public', table: 'accounts', filter: `userId=eq.${user.id}` },
+                        { event: '*', schema: 'public', table: 'challenges', filter: `userId=eq.${user.id}` },
                         (payload) => {
-                            console.log('Account change received!', payload);
-                            // Re-fetch to be safe and simple, or handle merge logic
-                            // For simplicity, re-fetching entire list is robust
-                            refreshAccounts();
+                            // Simplified: Re-fetch on any change to ensure consistency (or handle delta)
+                            // For simplicity and correctness with Supabase, re-fetching list or manually updating state.
+                            // Implementing Manual State Update for efficiency:
+                            if (payload.eventType === 'INSERT') {
+                                setAccounts(prev => [...prev, payload.new]);
+                            } else if (payload.eventType === 'UPDATE') {
+                                setAccounts(prev => prev.map(a => a.id === payload.new.id ? payload.new : a));
+                                setSelectedAccount(prev => prev && prev.id === payload.new.id ? payload.new : prev);
+                            } else if (payload.eventType === 'DELETE') {
+                                setAccounts(prev => prev.filter(a => a.id !== payload.old.id));
+                            }
                         }
                     )
                     .subscribe();
 
             } catch (err) {
-                console.error("AuthContext: Setup Error", err);
+                console.error("AuthContext: Fetch Error", err.message);
                 setLoading(false);
-            }
-        };
-
-        const refreshAccounts = async () => {
-            const { data: userAccounts } = await supabase
-                .from('accounts')
-                .select('*')
-                .eq('userId', user.id);
-            if (userAccounts) {
-                setAccounts(userAccounts);
-                // logic to maintain selected account could go here if needed
             }
         };
 
@@ -136,7 +131,7 @@ export const AuthProvider = ({ children }) => {
     React.useEffect(() => {
         if (!user) return;
 
-        let sessionChannel = null;
+        let channel = null;
 
         const setupSession = async () => {
             try {
@@ -149,7 +144,7 @@ export const AuthProvider = ({ children }) => {
                     await AsyncStorage.setItem(`sessionId_${user.id}`, localSessionId);
 
                     // Update Supabase Profiles
-                    await supabase.from('profiles').upsert({
+                    await supabase.from('rupiecemain').upsert({
                         id: user.id,
                         sessionId: localSessionId,
                         lastLogin: new Date().toISOString()
@@ -157,10 +152,10 @@ export const AuthProvider = ({ children }) => {
                 }
 
                 // 3. Listen to Profile Changes
-                sessionChannel = supabase.channel(`public:profiles:${user.id}`)
+                channel = supabase.channel('public:rupiecemain')
                     .on(
                         'postgres_changes',
-                        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${user.id}` },
+                        { event: 'UPDATE', schema: 'public', table: 'rupiecemain', filter: `id=eq.${user.id}` },
                         async (payload) => {
                             const newSessionId = payload.new.sessionId;
                             if (newSessionId && newSessionId !== localSessionId) {
@@ -179,7 +174,7 @@ export const AuthProvider = ({ children }) => {
         setupSession();
 
         return () => {
-            if (sessionChannel) supabase.removeChannel(sessionChannel);
+            if (channel) supabase.removeChannel(channel);
         };
     }, [user]);
 
@@ -201,7 +196,6 @@ export const AuthProvider = ({ children }) => {
             });
 
             if (error) throw error;
-
             const user = data.user;
 
             // Generate New Session ID
@@ -211,7 +205,7 @@ export const AuthProvider = ({ children }) => {
             await AsyncStorage.setItem(`sessionId_${user.id}`, newSessionId);
 
             // 2. Update Supabase Profile (Force other devices out)
-            await supabase.from('profiles').upsert({
+            await supabase.from('rupiecemain').upsert({
                 id: user.id,
                 sessionId: newSessionId,
                 lastLogin: new Date().toISOString()
@@ -221,7 +215,9 @@ export const AuthProvider = ({ children }) => {
         } catch (err) {
             console.error("Login Error", err);
             let msg = err.message;
-            if (msg.includes("Invalid login credentials")) msg = "Invalid Email or Password";
+            if (msg.includes("Invalid login credentials")) {
+                msg = "Invalid Email or Password";
+            }
             setError(msg);
             setLoading(false);
             return false;
@@ -236,6 +232,9 @@ export const AuthProvider = ({ children }) => {
                 await AsyncStorage.removeItem(`sessionId_${user.id}`);
                 await AsyncStorage.removeItem(`lastAccount_${user.id}`);
             }
+
+            // Unsubscribe all channels? (Supabase handles cleanup on client usually, but explicit is good)
+            supabase.getChannels().forEach(ch => supabase.removeChannel(ch));
 
             await supabase.auth.signOut();
 

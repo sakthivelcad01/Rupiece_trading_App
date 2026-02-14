@@ -90,7 +90,9 @@ function NavigationRoot() {
 import { ThemeProvider } from './src/context/ThemeContext';
 
 export default function App() {
+  console.log("[App] Mounting...");
   React.useEffect(() => {
+    console.log("[App] Effect running...");
     async function checkUpdates() {
       try {
         if (__DEV__) return; // Don't check in dev mode

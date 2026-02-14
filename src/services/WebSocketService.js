@@ -1,13 +1,11 @@
 
-import { NativeModules } from 'react-native';
-import { auth, db } from '../../firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
+import { supabase } from '../../supabaseConfig';
+import { WS_URL } from '../config/ApiConfig';
 
 class WebSocketService {
     constructor() {
         this.socket = null;
-        this.socketUrl = this.getDevServerURL();
+        this.socketUrl = WS_URL;
         this.subscriptions = new Set();
         this.subscribers = [];
         this.isConnected = false;
@@ -17,8 +15,8 @@ class WebSocketService {
         this.authResolve = null; // For Auth Handshake
 
         // Automatically Send Auth when user logs in if already connected
-        onAuthStateChanged(auth, (user) => {
-            if (user && this.isConnected) {
+        supabase.auth.onAuthStateChange((event, session) => {
+            if (event === 'SIGNED_IN' && session && this.isConnected) {
                 console.log("[WebSocketService] Auth State Changed (Logged In). Relaying Token...");
                 this.relayToken();
             }
@@ -27,33 +25,19 @@ class WebSocketService {
 
     async relayToken() {
         try {
-            // 1. Get Fresh Firebase ID Token for Server Auth
-            if (!auth.currentUser) {
+            // 1. Get Fresh Supabase Session Token
+            const { data: { session } } = await supabase.auth.getSession();
+
+            if (!session?.access_token) {
                 console.log("[WebSocketService] No User Logged In, cannot relay token.");
                 return false;
             }
 
-            const idToken = await auth.currentUser.getIdToken(true);
-
-            // 2. Get Upstox Access Token DB Config (Try/Catch to be robust against Permission Errors)
-            let upstoxToken = null;
-            try {
-                const docRef = doc(db, "config", "upstox");
-                const snap = await getDoc(docRef);
-                if (snap.exists()) {
-                    upstoxToken = snap.data().accessToken;
-                }
-            } catch (fsErr) {
-                console.warn("[WebSocketService] Could not fetch Upstox Token from Firestore (Permissions?):", fsErr.message);
-                // Continue anyway to authenticate the WebSocket!
-            }
-
-            console.log("[WebSocketService] Sending Auth: ID Token + Upstox Token");
+            console.log("[WebSocketService] Sending Auth: Supabase Access Token");
             this.send({
                 type: 'auth',
-                authToken: idToken, // Secure Server-Side Verification
-                upstoxToken: upstoxToken, // Relay for Proxy Calls
-                uid: auth.currentUser.uid
+                authToken: session.access_token, // Secure Server-Side Verification
+                uid: session.user.id
             });
             return true;
 
@@ -61,27 +45,6 @@ class WebSocketService {
             console.error("[WebSocketService] Token Relay Failed (Critical):", e);
             return false;
         }
-    }
-
-    getDevServerURL() {
-        // 1. Check for Production/Env Config
-        if (process.env.EXPO_PUBLIC_MARKET_DATA_URL) {
-            return process.env.EXPO_PUBLIC_MARKET_DATA_URL;
-        }
-
-        // 2. Fallback to Local Dev Server Detection
-        if (__DEV__ && NativeModules.SourceCode && NativeModules.SourceCode.scriptURL) {
-            try {
-                const scriptURL = NativeModules.SourceCode.scriptURL;
-                const address = scriptURL.split('://')[1].split('/')[0];
-                const hostname = address.split(':')[0];
-                console.log("[WebSocketService] Detected Host (Dev):", hostname);
-                return `ws://${hostname}:3000`;
-            } catch (e) {
-                console.log("[WebSocketService] Failed to detect host, using localhost");
-            }
-        }
-        return 'ws://localhost:3000';
     }
 
     async connect() {
@@ -132,30 +95,32 @@ class WebSocketService {
 
             this.socket.onmessage = (event) => {
                 try {
-                    // console.log("[WebSocketService] Raw Event Data:", event.data);
                     const data = JSON.parse(event.data);
-                    // console.log("[WebSocketService] Received:", data.type); 
 
                     if (data.type === 'response') {
                         const keys = data.data ? Object.keys(data.data) : [];
-                        console.log(`[WebSocketService] Response received for Req: ${data.requestId} | Error: ${data.error} | Keys: ${keys.length} (${keys.slice(0, 3)})`);
-                    }
-
-                    if (data.type === 'update' && data.feeds) {
-                        const count = Object.keys(data.feeds).length;
-                        if (count > 0) console.log(`[WebSocketService] Stream Update: ${count} ticks.`);
+                        // console.log(`[WebSocketService] Response received for Req: ${data.requestId} | Error: ${data.error} | Keys: ${keys.length}`);
                     }
 
                     if (data.type === 'pong') {
-                        console.log("[WebSocketService] PONG received. Token Available:", data.tokenAvailable);
+                        // console.log("[WebSocketService] PONG received.");
                         return;
                     }
 
-                    if (data.type === 'auth') {
-                        console.log("[WebSocketService] Auth Response:", data);
-                        if (data.status === 'success' && this.authResolve) {
+                    if (data.type === 'auth_success') {
+                        console.log("[WebSocketService] Auth Success Confirmed.");
+                        if (this.authResolve) {
                             this.authResolve(true);
-                            this.authResolve = null; // Clear
+                            this.authResolve = null;
+                        }
+                        return;
+                    }
+
+                    if (data.type === 'auth_error') {
+                        console.error("[WebSocketService] Auth Failed:", data.error);
+                        if (this.authResolve) {
+                            this.authResolve(false);
+                            this.authResolve = null;
                         }
                         return;
                     }
@@ -178,28 +143,20 @@ class WebSocketService {
                     if (feedsToProcess) {
                         // Ignore empty feeds (heartbeats/idle messages) to prevent REST call floods
                         if (Object.keys(feedsToProcess).length > 0) {
-                            // DEBUG: Print one feed to check structure
-                            const keys = Object.keys(feedsToProcess);
-                            if (keys.length > 0) {
-                                console.log("[WebSocketService] Raw Feed Sample:", JSON.stringify(feedsToProcess[keys[0]]));
-                            }
-
                             const normalized = {};
                             Object.entries(feedsToProcess).forEach(([key, feed]) => {
                                 normalized[key] = this.normalizeFeed(feed);
                             });
                             this.notifySubscribers(normalized);
                         }
-                    } else {
-                        console.log("[WebSocketService] Unhandled Message:", JSON.stringify(data));
                     }
                 } catch (e) {
                     console.error("[WebSocketService] JSON Parse Error:", e);
                 }
             };
-            // ... rest of connect ...
+
             this.socket.onerror = (e) => {
-                console.log("[WebSocketService] Error:", JSON.stringify(e));
+                console.log("[WebSocketService] Error:", e.message);
             };
 
             this.socket.onclose = () => {
@@ -239,9 +196,6 @@ class WebSocketService {
         if (ltpc) {
             ltp = Number(ltpc.ltp) || 0;
             close = Number(ltpc.cp) || 0; // cp is Closing Price
-            if (close === 0) {
-                console.log("[WebSocketDebug] Zero Close found. LTPC keys:", Object.keys(ltpc));
-            }
         }
 
         if (ltp && close) {

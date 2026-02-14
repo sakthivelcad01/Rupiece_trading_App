@@ -210,7 +210,7 @@ export default function AccountScreen({ navigation }) {
                             <ActivityIndicator size="small" color="#888" />
                         ) : (
                             <Text style={styles.value}>
-                                {userData?.fullName || userData?.fullname || userData?.name || "User"}
+                                {userData?.fullName || userData?.fullname || userData?.name || userData?.nickname || "User"}
                             </Text>
                         )}
 
@@ -225,7 +225,7 @@ export default function AccountScreen({ navigation }) {
                         {(() => {
                             const size = selectedAccount.accountSize || selectedAccount.balance;
                             const isCompetition = selectedAccount.isCompetition || selectedAccount.phase === 'Competition';
-                            // 10% (0.90) for Competition, 8% (0.92) for Standard
+                            // 10% (0.90) for Competition, 8% (0.92) for Phase 1/Phase 2/Funded
                             const maxLossPct = isCompetition ? 0.90 : 0.92;
                             const profitTargetPct = 1.15; // 15%
 

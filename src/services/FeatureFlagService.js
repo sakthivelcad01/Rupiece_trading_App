@@ -1,33 +1,27 @@
-import { supabase } from './SupabaseService';
+import { db } from '../../firebaseConfig';
+import { doc, onSnapshot, getDoc } from 'firebase/firestore';
 
 let _phase1Enabled = false;
 let _isInitialized = false;
 
 export const FeatureFlagService = {
     /**
-     * Initialize listener for real-time updates
+     * Initialize listener for real-time updates from Firestore
      */
     init: () => {
         if (_isInitialized) return;
 
         try {
-            // Listen for changes to the 'config' table where key is 'app_settings'
-            supabase.channel('public:config:key=eq.app_settings')
-                .on(
-                    'postgres_changes',
-                    { event: 'UPDATE', schema: 'public', table: 'config', filter: "key=eq.app_settings" },
-                    (payload) => {
-                        const newValue = payload.new.value; // Assuming 'value' column holds the JSON
-                        if (newValue) {
-                            _phase1Enabled = !!newValue.phase1Enabled;
-                            console.log("[FeatureFlagService] Updated phase1Enabled:", _phase1Enabled);
-                        }
-                    }
-                )
-                .subscribe();
-
-            // Also do an initial fetch
-            FeatureFlagService.checkPhase1EnabledAsync();
+            // Listen for changes to the 'config/app_settings' document
+            onSnapshot(doc(db, "config", "app_settings"), (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    _phase1Enabled = !!data.phase1Enabled;
+                    console.log("[FeatureFlagService] Updated phase1Enabled:", _phase1Enabled);
+                }
+            }, (error) => {
+                console.error("[FeatureFlagService] Snapshot Error:", error);
+            });
 
             _isInitialized = true;
         } catch (error) {
@@ -36,25 +30,23 @@ export const FeatureFlagService = {
     },
 
     /**
-     * Synchronous check (relies on listener having updated the value)
+     * Synchronous check
      */
     isPhase1Enabled: () => {
         return _phase1Enabled;
     },
 
     /**
-     * Async check (fetches fresh value if needed)
+     * Async check
      */
     checkPhase1EnabledAsync: async () => {
         try {
-            const { data, error } = await supabase
-                .from('config')
-                .select('value')
-                .eq('key', 'app_settings')
-                .single();
+            const docRef = doc(db, "config", "app_settings");
+            const docSnap = await getDoc(docRef);
 
-            if (data && data.value) {
-                const val = !!data.value.phase1Enabled;
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                const val = !!data.phase1Enabled;
                 _phase1Enabled = val;
                 return val;
             }
