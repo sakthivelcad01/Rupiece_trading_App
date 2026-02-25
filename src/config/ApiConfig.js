@@ -6,6 +6,9 @@ const getBaseUrl = () => {
         return process.env.EXPO_PUBLIC_MARKET_DATA_URL;
     }
 
+    // FALLBACK: Use Hugging Face Cloud if local config is missing (Prevents localhost issues on physical devices)
+    return "https://sakthivel-03-rupiece-api.hf.space";
+
     // 2. Android Emulator Special Case
     // 'localhost' on Android refers to the device itself. The host machine is 10.0.2.2
     // We only use this if we are SURE we are on emulator and not a physical device, 
@@ -47,8 +50,11 @@ if (isFullUrl(BASE_URL_OR_HOST)) {
 
     const isSecure = BASE_URL_OR_HOST.includes('wss://') || BASE_URL_OR_HOST.includes('https://') || BASE_URL_OR_HOST.includes('.hf.space');
 
-    apiUrl = isSecure ? `https://${noProto}` : `http://${noProto}`;
-    wsUrl = isSecure ? `wss://${noProto}` : `ws://${noProto}`;
+    // If the input already has a port (like :3000), don't append it again is handled by noProto usually containing it if header splitting 
+    // actually, simpler:
+
+    wsUrl = BASE_URL_OR_HOST.startsWith('http') ? BASE_URL_OR_HOST.replace('http', 'ws') : BASE_URL_OR_HOST;
+    apiUrl = BASE_URL_OR_HOST.startsWith('ws') ? BASE_URL_OR_HOST.replace('ws', 'http') : BASE_URL_OR_HOST;
 
 } else {
     // It's just a Hostname (localhost, 10.0.2.2, 192.168.x.x)

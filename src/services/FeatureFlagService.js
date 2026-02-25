@@ -1,27 +1,42 @@
-import { db } from '../../firebaseConfig';
-import { doc, onSnapshot, getDoc } from 'firebase/firestore';
+import { supabase } from '../../supabaseConfig';
 
 let _phase1Enabled = false;
 let _isInitialized = false;
 
 export const FeatureFlagService = {
     /**
-     * Initialize listener for real-time updates from Firestore
+     * Initialize listener for real-time updates from Supabase
      */
     init: () => {
         if (_isInitialized) return;
 
         try {
-            // Listen for changes to the 'config/app_settings' document
-            onSnapshot(doc(db, "config", "app_settings"), (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    _phase1Enabled = !!data.phase1Enabled;
-                    console.log("[FeatureFlagService] Updated phase1Enabled:", _phase1Enabled);
-                }
-            }, (error) => {
-                console.error("[FeatureFlagService] Snapshot Error:", error);
-            });
+            // Initial Fetch
+            supabase
+                .from('config')
+                .select('phase1Enabled')
+                .eq('id', 'app_settings')
+                .single()
+                .then(({ data }) => {
+                    if (data) {
+                        _phase1Enabled = !!data.phase1Enabled;
+                        console.log("[FeatureFlagService] Initial phase1Enabled:", _phase1Enabled);
+                    }
+                });
+
+            // Listen for changes
+            supabase.channel('config:app_settings')
+                .on(
+                    'postgres_changes',
+                    { event: 'UPDATE', schema: 'public', table: 'config', filter: "id=eq.app_settings" },
+                    (payload) => {
+                        if (payload.new) {
+                            _phase1Enabled = !!payload.new.phase1Enabled;
+                            console.log("[FeatureFlagService] Updated phase1Enabled:", _phase1Enabled);
+                        }
+                    }
+                )
+                .subscribe();
 
             _isInitialized = true;
         } catch (error) {
@@ -41,11 +56,13 @@ export const FeatureFlagService = {
      */
     checkPhase1EnabledAsync: async () => {
         try {
-            const docRef = doc(db, "config", "app_settings");
-            const docSnap = await getDoc(docRef);
+            const { data, error } = await supabase
+                .from('config')
+                .select('phase1Enabled')
+                .eq('id', 'app_settings')
+                .single();
 
-            if (docSnap.exists()) {
-                const data = docSnap.data();
+            if (data) {
                 const val = !!data.phase1Enabled;
                 _phase1Enabled = val;
                 return val;

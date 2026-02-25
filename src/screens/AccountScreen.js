@@ -4,9 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 import { useAlert } from '../context/AlertContext';
 import { useTheme } from '../context/ThemeContext';
-import { doc, getDoc, collection, query, where, getDocs, onSnapshot, or } from 'firebase/firestore';
-
-import { db, auth } from '../../firebaseConfig';
+import { supabase } from '../../supabaseConfig';
 import { Settings, User, LogOut, ChevronDown, Check, AlertTriangle, RefreshCcw } from 'lucide-react-native';
 import { MarketService } from '../services/MarketService';
 import { OrderService } from '../services/OrderService';
@@ -26,14 +24,19 @@ export default function AccountScreen({ navigation }) {
 
     useEffect(() => {
         const fetchUserData = async () => {
-            if (user && auth.currentUser) {
+            if (user) {
                 try {
                     // 1. Fetch User Profile
-                    const docRef = doc(db, "rupiecemain", auth.currentUser.uid);
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
+                    const { data, error } = await supabase
+                        .from('rupiecemain') // Assuming table name is rupiecemain
+                        .select('*')
+                        .eq('id', user.id)
+                        .single();
+
+                    if (data) {
                         setUserData(data);
+                    } else if (error) {
+                        console.error("Error fetching account data (Supabase):", error.message);
                     }
                 } catch (err) {
                     console.error("Error fetching account data:", err);

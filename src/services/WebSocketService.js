@@ -13,6 +13,7 @@ class WebSocketService {
         this.reconnectTimer = null;
         this.pendingRequests = new Map(); // requestId -> { resolve, reject, timeout }
         this.authResolve = null; // For Auth Handshake
+        this.pingTimer = null;
 
         // Automatically Send Auth when user logs in if already connected
         supabase.auth.onAuthStateChange((event, session) => {
@@ -66,24 +67,32 @@ class WebSocketService {
                     // 2. Wait for Server to Verify Token (Handshake)
                     console.log("[WebSocketService] Waiting for Server Auth Verification...");
 
-                    // Allow up to 10s for auth
+                    // Allow up to 30s for auth on cloud servers
                     const authPromise = new Promise(resolve => {
                         this.authResolve = resolve;
                     });
 
-                    // Race a timeout
-                    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(false), 10000));
+                    // Race a 30s timeout
+                    const timeoutPromise = new Promise(resolve => setTimeout(() => {
+                        if (this.authResolve) {
+                            this.authResolve(false);
+                            this.authResolve = null;
+                        }
+                        resolve(false);
+                    }, 30000));
 
                     const authSuccess = await Promise.race([authPromise, timeoutPromise]);
 
                     if (authSuccess) {
                         console.log("[WebSocketService] Connected & Authenticated (Verified).");
                         this.isConnected = true;
+                        // Start Keep-Alive (Ping)
+                        this.startPing();
                         // 3. Resubscribe to any cached keys
                         this.resubscribe();
                     } else {
-                        console.error("[WebSocketService] Auth Handshake Timed Out!");
-                        this.socket.close(); // Retry
+                        console.error("[WebSocketService] Auth Handshake Timed Out or Failed!");
+                        if (this.socket) this.socket.close(); // Retry
                     }
                 } else {
                     // No User Logged in, treat as Connected (Unauthenticated)
@@ -145,7 +154,8 @@ class WebSocketService {
                         if (Object.keys(feedsToProcess).length > 0) {
                             const normalized = {};
                             Object.entries(feedsToProcess).forEach(([key, feed]) => {
-                                normalized[key] = this.normalizeFeed(feed);
+                                const normalizedKey = key.replace(/:/g, '|');
+                                normalized[normalizedKey] = this.normalizeFeed(feed);
                             });
                             this.notifySubscribers(normalized);
                         }
@@ -202,9 +212,10 @@ class WebSocketService {
             change = ltp - close;
         }
 
-        // Return structure matching MarketService.getQuotes
+        // Return structure matching MarketService.getQuotes and UI expectations
         return {
             last_price: ltp,
+            ltp: ltp, // For legacy UI compatibility
             net_change: change,
             ohlc: {
                 close: close
@@ -218,6 +229,16 @@ class WebSocketService {
             this.socket = null;
         }
         this.isConnected = false;
+        if (this.pingTimer) clearInterval(this.pingTimer);
+    }
+
+    startPing() {
+        if (this.pingTimer) clearInterval(this.pingTimer);
+        this.pingTimer = setInterval(() => {
+            if (this.isConnected) {
+                this.send({ type: 'ping' });
+            }
+        }, 15000); // Send ping every 15s to bypass Hugging Face idle timeout
     }
 
     scheduleReconnect() {
@@ -248,7 +269,7 @@ class WebSocketService {
      * @param {number} timeoutMs 
      * @returns {Promise<any>}
      */
-    async request(payload, timeoutMs = 10000) {
+    async request(payload, timeoutMs = 60000) {
         try {
             await this.waitForConnection();
         } catch (e) {

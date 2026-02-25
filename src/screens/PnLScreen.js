@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { auth } from '../../firebaseConfig';
 import { useAuth } from '../context/AuthContext';
 import { MarketService } from '../services/MarketService';
 import { OrderService } from '../services/OrderService';
@@ -218,7 +217,7 @@ const HistoryCard = ({ item, colors }) => {
 
 export default function PnLScreen({ navigation }) {
     const { colors } = useTheme();
-    const { selectedAccount } = useAuth();
+    const { selectedAccount, user } = useAuth();
     const { showAlert } = useAlert();
     const [activeTab, setActiveTab] = useState('POSITIONS');
 
@@ -253,20 +252,18 @@ export default function PnLScreen({ navigation }) {
             return;
         }
 
-        // Wait for Firebase Auth to be ready
-        if (!auth.currentUser) {
-            if (!silent) console.log("[PnLScreen] Waiting for auth.currentUser...");
+        // Wait for Auth to be ready
+        if (!user) {
+            if (!silent) console.log("[PnLScreen] Waiting for user...");
             return;
         }
-
-        const user = auth.currentUser;
 
         if (!silent) setLoading(true);
         try {
             if (activeTab === 'POSITIONS') {
                 // Auto-Exipry Check Hook
                 if (!silent) {
-                    OrderService.checkAndSquareOffExpiredPositions(selectedAccount, user.uid).catch(console.error);
+                    OrderService.checkAndSquareOffExpiredPositions(selectedAccount, user.id).catch(console.error);
                 }
 
                 const dbPositions = await OrderService.getPositions(selectedAccount.id);
@@ -287,9 +284,7 @@ export default function PnLScreen({ navigation }) {
                 setTrades(dbTrades);
             } else if (activeTab === 'ORDERS') {
                 // Limit Order Trigger Hook
-                if (user) {
-                    OrderService.checkPendingOrders(selectedAccount, user.uid).catch(console.error);
-                }
+                OrderService.checkPendingOrders(selectedAccount, user.id).catch(console.error);
                 const dbOrders = await OrderService.getOrderHistory(selectedAccount.id);
                 setOrders(dbOrders);
             }

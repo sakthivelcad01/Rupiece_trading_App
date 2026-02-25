@@ -2,8 +2,8 @@ import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { OrderService } from '../services/OrderService';
 import { MarketService } from '../services/MarketService';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../../firebaseConfig';
+import { supabase } from '../../supabaseConfig';
+import { useMarketData } from './useMarketData';
 
 export function useOrderMonitor() {
     const { user, selectedAccount } = useAuth();
@@ -15,30 +15,46 @@ export function useOrderMonitor() {
     useEffect(() => {
         if (!user || !selectedAccount) return;
 
-        const q = query(
-            collection(db, "orders"),
-            where("accountId", "==", selectedAccount.id),
-            where("status", "==", "PENDING")
-        );
+        let channel = null;
 
-        let unsub = null;
-        const timer = setTimeout(() => {
-            if (!auth.currentUser) {
-                console.log("[useOrderMonitor] Postponing Orders Listener: auth.currentUser is null");
-                return;
-            }
-            console.log(`[useOrderMonitor] Starting Orders Listener. UID: ${auth.currentUser.uid}, Selected: ${selectedAccount.id}`);
-            unsub = onSnapshot(q, (snapshot) => {
-                const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setPendingOrders(orders);
-            }, (err) => {
-                console.error("[useOrderMonitor] Orders Snapshot Error:", err);
-            });
-        }, 1000); // Increased delay for stability
+        const fetchPendingOrders = async () => {
+            const { data, error } = await supabase
+                .from('orders')
+                .select('*')
+                .eq('accountId', selectedAccount.id)
+                .eq('status', 'PENDING');
+
+            if (data) setPendingOrders(data);
+            if (error) console.error("Error fetching pending orders:", error);
+        };
+
+        fetchPendingOrders();
+
+        channel = supabase.channel(`orders:${selectedAccount.id}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'orders', filter: `accountId=eq.${selectedAccount.id}` },
+                (payload) => {
+                    if (payload.new && payload.new.status !== 'PENDING') {
+                        // Order status changed (e.g. to EXECUTED or CANCELLED), remove from pending
+                        setPendingOrders(prev => prev.filter(o => o.id !== payload.new.id));
+                    } else if (payload.eventType === 'INSERT' && payload.new.status === 'PENDING') {
+                        setPendingOrders(prev => [...prev, payload.new]);
+                    } else if (payload.eventType === 'UPDATE') {
+                        if (payload.new.status === 'PENDING') {
+                            setPendingOrders(prev => prev.map(o => o.id === payload.new.id ? payload.new : o));
+                        } else {
+                            setPendingOrders(prev => prev.filter(o => o.id !== payload.new.id));
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        setPendingOrders(prev => prev.filter(o => o.id !== payload.old.id));
+                    }
+                }
+            )
+            .subscribe();
 
         return () => {
-            clearTimeout(timer);
-            if (unsub) unsub();
+            if (channel) supabase.removeChannel(channel);
         };
     }, [user, selectedAccount]);
 
@@ -46,35 +62,48 @@ export function useOrderMonitor() {
     useEffect(() => {
         if (!user || !selectedAccount) return;
 
-        const q = query(
-            collection(db, "positions"),
-            where("accountId", "==", selectedAccount.id),
-            where("status", "==", "OPEN")
-        );
+        let channel = null;
 
-        let unsub = null;
-        const timer = setTimeout(() => {
-            if (!auth.currentUser) {
-                console.log("[useOrderMonitor] Postponing Positions Listener: auth.currentUser is null");
-                return;
-            }
-            console.log(`[useOrderMonitor] Starting Positions Listener. UID: ${auth.currentUser.uid}`);
-            unsub = onSnapshot(q, (snapshot) => {
-                const positions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setOpenPositions(positions);
-            }, (err) => {
-                console.error("[useOrderMonitor] Positions Snapshot Error:", err);
-            });
-        }, 1000);
+        const fetchOpenPositions = async () => {
+            const { data, error } = await supabase
+                .from('positions')
+                .select('*')
+                .eq('accountId', selectedAccount.id)
+                .eq('status', 'OPEN');
+
+            if (data) setOpenPositions(data);
+            if (error) console.error("Error fetching open positions:", error);
+        };
+
+        fetchOpenPositions();
+
+        channel = supabase.channel(`positions:${selectedAccount.id}`)
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'positions', filter: `accountId=eq.${selectedAccount.id}` },
+                (payload) => {
+                    if (payload.new && payload.new.status !== 'OPEN') {
+                        // Position closed, remove from list
+                        setOpenPositions(prev => prev.filter(p => p.id !== payload.new.id));
+                    } else if (payload.eventType === 'INSERT' && payload.new.status === 'OPEN') {
+                        setOpenPositions(prev => [...prev, payload.new]);
+                    } else if (payload.eventType === 'UPDATE') {
+                        if (payload.new.status === 'OPEN') {
+                            setOpenPositions(prev => prev.map(p => p.id === payload.new.id ? payload.new : p));
+                        } else {
+                            setOpenPositions(prev => prev.filter(p => p.id !== payload.new.id));
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        setOpenPositions(prev => prev.filter(p => p.id !== payload.old.id));
+                    }
+                }
+            )
+            .subscribe();
 
         return () => {
-            clearTimeout(timer);
-            if (unsub) unsub();
+            if (channel) supabase.removeChannel(channel);
         };
     }, [user, selectedAccount]);
-
-    // --- REFACTORED TO USE HOOK ---
-    const { useMarketData } = require('./useMarketData');
 
     // Dynamically calculate keys to monitor
     const [monitorKeys, setMonitorKeys] = useState([]);
@@ -89,7 +118,6 @@ export function useOrderMonitor() {
     // Subscribe to real-time data
     const liveData = useMarketData(monitorKeys);
 
-    // Trigger Logic whenever liveData updates
     // Trigger Logic whenever liveData updates
     useEffect(() => {
         if (!user || !selectedAccount) return; // Prevent crash on logout
@@ -131,11 +159,14 @@ export function useOrderMonitor() {
                     if (pos.qty > 0) { // LONG
                         if (pos.sl && lastPrice <= pos.sl) { triggerExit = true; exitReason = "SL Hit"; }
                         if (pos.tp && lastPrice >= pos.tp) { triggerExit = true; exitReason = "TP Hit"; }
+                    } else if (pos.qty < 0) { // SHORT (if supported)
+                        if (pos.sl && lastPrice >= pos.sl) { triggerExit = true; exitReason = "SL Hit"; }
+                        if (pos.tp && lastPrice <= pos.tp) { triggerExit = true; exitReason = "TP Hit"; }
                     }
 
                     if (triggerExit) {
                         console.log(`[Monitor] Closing Position ${pos.symbol} (${exitReason}) @ ${lastPrice}`);
-                        await OrderService.closePosition(pos, lastPrice, selectedAccount, user.uid);
+                        await OrderService.closePosition(pos, lastPrice, selectedAccount, user.id);
                     }
                 }
 
@@ -147,24 +178,14 @@ export function useOrderMonitor() {
 
     }, [liveData]); // Trigger on data update
 
-    /* REMOVED POLLING LOGIC 
-    // 3. Polling Logic
-    useEffect(() => { ... }, [...]); 
-    */
-
     // 4. Auto Square-off Logic (Intraday at 3:30 PM)
     useEffect(() => {
-        if (!user || !auth.currentUser || !selectedAccount) return;
+        if (!user || !selectedAccount) return;
 
         const checkAutoSquareOff = async () => {
             const now = new Date();
             const hours = now.getHours();
             const minutes = now.getMinutes();
-
-            // 3:30 PM is 15:30
-            // We check if time is >= 15:30. 
-            // Ideally this runs only once or periodically checks. 
-            // To prevent repeated attempts on already closed positions, we filter by OPEN positions.
 
             if (hours > 15 || (hours === 15 && minutes >= 30)) {
                 // Time is past 3:30 PM
@@ -174,20 +195,16 @@ export function useOrderMonitor() {
 
                 console.log(`[AutoSquareOff] Time is ${hours}:${minutes}. Closing ${intradayPositions.length} Intraday positions.`);
 
-                // We need current market prices to close accurately
-                // Reuse existing quote fetching logic if possible, or just force market close
-                // For simplicity, we trigger close which usually fetches price inside OrderService or we pass 0 for Market
-
                 try {
                     const keys = intradayPositions.map(p => p.instrumentKey);
                     const quotes = await MarketService.getQuotes(keys);
 
                     for (const pos of intradayPositions) {
                         const quote = quotes[pos.instrumentKey];
-                        const price = quote ? quote.last_price : pos.avgPrice; // Fallback to entry if no quote (risky but better than crash)
+                        const price = quote ? quote.last_price : pos.avgPrice;
 
                         console.log(`[AutoSquareOff] Squared off ${pos.symbol} @ ${price}`);
-                        await OrderService.closePosition(pos, price, selectedAccount, user.uid);
+                        await OrderService.closePosition(pos, price, selectedAccount, user.id);
                     }
                 } catch (err) {
                     console.error("Auto Square-off Error:", err);
@@ -210,7 +227,6 @@ export function useOrderMonitor() {
                 console.warn("[Emergency Close] Account FAILED (Max Loss Hit). Closing ALL positions.");
 
                 try {
-                    // Fetch latest prices for accurate close
                     const keys = openPositions.map(p => p.instrumentKey);
                     const quotes = await MarketService.getQuotes(keys);
 
@@ -219,16 +235,17 @@ export function useOrderMonitor() {
                         const price = quote ? quote.last_price : pos.avgPrice;
 
                         console.log(`[Emergency Close] Closing ${pos.symbol} @ ${price}`);
-                        await OrderService.closePosition(pos, price, selectedAccount, user.uid);
+                        await OrderService.closePosition(pos, price, selectedAccount, user.id);
                     }
                 } catch (err) {
                     console.error("[Emergency Close] Failed:", err);
                 }
             };
 
-            // Trigger immediately
             closeAllPositions();
         }
 
     }, [selectedAccount, openPositions, user]);
 }
+
+

@@ -12,7 +12,7 @@ export const MarketService = {
             const data = await webSocketService.request({
                 type: 'quotes',
                 symbols: validSymbols
-            }, 25000); // 25s Timeout
+            }, 60000); // 60s Timeout for cloud reliability
 
             const normalizedData = {};
             if (data) {
@@ -60,7 +60,7 @@ export const MarketService = {
                 type: 'optionContracts',
                 instrumentKey,
                 expiryDate
-            }, 25000); // 25s Timeout for heavy payload
+            }, 60000); // 60s Timeout for heavy cloud payload
 
             console.log(`[MarketService] getOptionContracts Raw Resp: ${Array.isArray(data) ? data.length : 'Not Array'}`);
 

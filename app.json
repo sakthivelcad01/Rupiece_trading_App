@@ -21,7 +21,8 @@
         "backgroundColor": "#0C0C0C"
       },
       "package": "com.tradeexec.mvp",
-      "edgeToEdgeEnabled": false
+      "edgeToEdgeEnabled": false,
+      "usesCleartextTraffic": true
     },
     "web": {
       "favicon": "./assets/favicon.png"

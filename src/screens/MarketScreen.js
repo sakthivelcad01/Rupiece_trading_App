@@ -38,6 +38,8 @@ const IndexCard = ({ data, symbol, active, onPress, colors }) => {
     );
 };
 
+const { useMarketData } = require('../hooks/useMarketData');
+
 export default function MarketScreen({ navigation }) {
     const { colors } = useTheme();
     const [selectedIndex, setSelectedIndex] = useState("NIFTY");
@@ -88,6 +90,13 @@ export default function MarketScreen({ navigation }) {
                     }));
 
                 const currentPrice = newIndicesData[selectedIndex]?.last_price || 0;
+
+                if (currentPrice === 0) {
+                    console.log(`[MarketScreen] Waiting for valid ${selectedIndex} price before processing chain...`);
+                    setOptionChain([]);
+                    return;
+                }
+
                 let step = 50;
                 if (selectedIndex === 'BANKNIFTY' || selectedIndex === 'SENSEX' || selectedIndex === 'BANKEX') {
                     step = 100;
@@ -104,14 +113,10 @@ export default function MarketScreen({ navigation }) {
 
                 let atmIndex = 0;
                 let minDiff = Number.MAX_VALUE;
-                if (currentPrice > 0) {
-                    validContracts.forEach((c, i) => {
-                        const diff = Math.abs(c.strike_price - currentPrice);
-                        if (diff < minDiff) { minDiff = diff; atmIndex = i; }
-                    });
-                } else {
-                    atmIndex = Math.floor(validContracts.length / 2);
-                }
+                validContracts.forEach((c, i) => {
+                    const diff = Math.abs(c.strike_price - currentPrice);
+                    if (diff < minDiff) { minDiff = diff; atmIndex = i; }
+                });
 
                 const range = 25;
                 const startIndex = Math.max(0, atmIndex - range);
@@ -160,9 +165,6 @@ export default function MarketScreen({ navigation }) {
             setLastUpdated(new Date());
         }
     };
-
-    // --- REFACTORED TO USE HOOK ---
-    const { useMarketData } = require('../hooks/useMarketData');
 
     // 1. Get Indices Data Real-time
     const indexKeys = Object.values(INSTRUMENT_KEYS);

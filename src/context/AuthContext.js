@@ -17,11 +17,19 @@ export const AuthProvider = ({ children }) => {
     React.useEffect(() => {
         // Check initial session
         supabase.auth.getSession().then(({ data: { session } }) => {
+            console.log("[Auth] Initial Session Check Complete");
             setUser(session?.user ?? null);
-            if (!session?.user) {
-                setLoading(false);
-            }
+            setLoading(false);
+        }).catch(err => {
+            console.error("[Auth] Session Check Failed:", err.message);
+            setLoading(false);
         });
+
+        // SAFETY TIMEOUT: Force loading to false if Supabase hangs
+        const timeout = setTimeout(() => {
+            console.warn("[Auth] SUPABASE HANG DETECTED. Forcing loading=false.");
+            setLoading(false);
+        }, 5000); // Increased to 5s for cloud reliability
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             const currentUser = session?.user;
@@ -34,7 +42,10 @@ export const AuthProvider = ({ children }) => {
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            subscription.unsubscribe();
+            clearTimeout(timeout);
+        };
     }, []);
 
     // Fetch Accounts & Restore Selection when User is set

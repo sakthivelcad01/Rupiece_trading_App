@@ -1,17 +1,24 @@
-import { doc, getDoc } from 'firebase/firestore';
-import { db, auth } from '../../firebaseConfig';
+import { supabase } from '../../supabaseConfig';
 
 const BASE_URL = 'https://api.upstox.com/v2';
 
 const getAccessToken = async () => {
     try {
-        if (!auth.currentUser) return null;
-        const docRef = doc(db, "config", "upstox");
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            return docSnap.data().accessToken;
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return null;
+
+        const { data, error } = await supabase
+            .from('config')
+            .select('accessToken') // Assuming the column exists in config table for the 'upstox' row
+            .eq('id', 'upstox')
+            .single();
+
+        if (data) {
+            return data.accessToken;
+        } else if (error) {
+            console.warn("Upstox Config fetch error (Supabase):", error.message);
         }
-        console.warn("Upstox Config not found in Firestore");
+
         return null;
     } catch (error) {
         console.error("UpstoxService: Error fetching access token:", error);
