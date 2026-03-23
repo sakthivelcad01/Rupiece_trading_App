@@ -56,11 +56,16 @@ export const AuthProvider = ({ children }) => {
 
         const fetchAccounts = async () => {
             try {
-                // Initial Fetch
-                const { data: userAccounts, error } = await supabase
+                let query = supabase
                     .from('challenges')
                     .select('*')
                     .eq('userId', user.id);
+                
+                if (user.isChallenge && user.challengeAccountId) {
+                    query = query.eq('id', user.challengeAccountId);
+                }
+
+                const { data: userAccounts, error } = await query;
 
                 if (error) throw error;
 
@@ -88,7 +93,15 @@ export const AuthProvider = ({ children }) => {
                 channel = supabase.channel('public:challenges')
                     .on(
                         'postgres_changes',
-                        { event: '*', schema: 'public', table: 'challenges', filter: `userId=eq.${user.id}` },
+                        'postgres_changes',
+                        { 
+                            event: '*', 
+                            schema: 'public', 
+                            table: 'challenges', 
+                            filter: user.isChallenge && user.challengeAccountId 
+                                ? `id=eq.${user.challengeAccountId}` 
+                                : `userId=eq.${user.id}` 
+                        },
                         (payload) => {
                             // Simplified: Re-fetch on any change to ensure consistency (or handle delta)
                             // For simplicity and correctness with Supabase, re-fetching list or manually updating state.
@@ -197,32 +210,62 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
-    const login = async (email, password) => {
+    const login = async (emailOrAccountId, password, isChallenge = false) => {
         setLoading(true);
         setError(null);
         try {
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-            });
+            if (isChallenge) {
+                // Challenge Account Login
+                const { data, error } = await supabase
+                    .from('challenges')
+                    .select('*')
+                    .eq('accountId', emailOrAccountId)
+                    .single();
 
-            if (error) throw error;
-            const user = data.user;
+                if (error || !data || data.password !== password) {
+                    throw new Error("Invalid Account ID or Password");
+                }
 
-            // Generate New Session ID
-            const newSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
+                // For challenge-only login, we fetch the profile of the owner
+                const { data: profile } = await supabase.from('rupiecemain').select('*').eq('id', data.userId).single();
+                
+                setUser({ 
+                    id: data.userId, 
+                    email: profile?.email || 'challenge-user@rupiece.in', 
+                    isChallenge: true,
+                    challengeAccountId: data.id 
+                });
+                setSelectedAccount(data);
+                
+                await AsyncStorage.setItem(`sessionId_${data.userId}`, "challenge_" + data.id);
+                await AsyncStorage.setItem(`lastAccount_${data.userId}`, data.id);
+                
+                return true;
+            } else {
+                // Standard Supabase Auth
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: emailOrAccountId,
+                    password,
+                });
 
-            // 1. Save Local
-            await AsyncStorage.setItem(`sessionId_${user.id}`, newSessionId);
+                if (error) throw error;
+                const user = data.user;
 
-            // 2. Update Supabase Profile (Force other devices out)
-            await supabase.from('rupiecemain').upsert({
-                id: user.id,
-                sessionId: newSessionId,
-                lastLogin: new Date().toISOString()
-            });
+                // Generate New Session ID
+                const newSessionId = Date.now().toString() + "_" + Math.random().toString(36).substr(2, 9);
 
-            return true;
+                // 1. Save Local
+                await AsyncStorage.setItem(`sessionId_${user.id}`, newSessionId);
+
+                // 2. Update Supabase Profile (Force other devices out)
+                await supabase.from('rupiecemain').upsert({
+                    id: user.id,
+                    sessionId: newSessionId,
+                    lastLogin: new Date().toISOString()
+                });
+
+                return true;
+            }
         } catch (err) {
             console.error("Login Error", err);
             let msg = err.message;

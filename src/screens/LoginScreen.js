@@ -14,7 +14,8 @@ export default function LoginScreen() {
     const [password, setPassword] = useState('');
     const { login, loading, error } = useAuth();
     const [isBiometricSupported, setIsBiometricSupported] = useState(false);
-    const [showBioPopup, setShowBioPopup] = useState(false);
+    
+    const [loginMode, setLoginMode] = useState('email'); // 'email' or 'account'
 
     React.useEffect(() => {
         checkBiometrics();
@@ -28,13 +29,10 @@ export default function LoginScreen() {
 
     const handleLogin = async () => {
         if (!email || !password) return;
-        const success = await login(email, password);
-        // Note: useAuth login usually returns void or throws? We'll assume successful if no error.
-        // Actually we can't easily hook into success here unless login returns logic.
-        // But we can store credentials optimistically or rely on AuthContext.
-
-        // For this demo, let's store credentials if login proceeds (error handling is in AuthContext usually)
-        if (email && password) {
+        const isChallenge = loginMode === 'account';
+        const success = await login(email, password, isChallenge);
+        
+        if (success && email && password && !isChallenge) {
             await SecureStore.setItemAsync('secure_email', email);
             await SecureStore.setItemAsync('secure_password', password);
         }
@@ -57,7 +55,8 @@ export default function LoginScreen() {
 
             if (result.success) {
                 setEmail(savedEmail); // Visual feedback
-                await login(savedEmail, savedPassword);
+                setLoginMode('email');
+                await login(savedEmail, savedPassword, false);
             }
         } catch (e) {
             console.error(e);
@@ -76,16 +75,32 @@ export default function LoginScreen() {
                     <Text style={styles.subtitle}>exactly what you want</Text>
                 </View>
 
+                {/* Mode Toggle */}
+                <View style={styles.toggleContainer}>
+                    <TouchableOpacity 
+                        onPress={() => setLoginMode('email')}
+                        style={[styles.toggleButton, loginMode === 'email' && styles.toggleActive]}
+                    >
+                        <Text style={[styles.toggleText, loginMode === 'email' && styles.toggleTextActive]}>EMAIL</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity 
+                        onPress={() => setLoginMode('account')}
+                        style={[styles.toggleButton, loginMode === 'account' && styles.toggleActive]}
+                    >
+                        <Text style={[styles.toggleText, loginMode === 'account' && styles.toggleTextActive]}>ACCOUNT ID</Text>
+                    </TouchableOpacity>
+                </View>
+
                 <View style={styles.form}>
-                    <Text style={styles.label}>Email Address</Text>
+                    <Text style={styles.label}>{loginMode === 'email' ? 'Email Address' : 'Account ID'}</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder="Enter Email"
+                        placeholder={loginMode === 'email' ? "Enter Email" : "ACC-XXXX-XXXX"}
                         placeholderTextColor="#666"
                         value={email}
                         onChangeText={setEmail}
                         autoCapitalize="none"
-                        keyboardType="email-address"
+                        keyboardType={loginMode === 'email' ? "email-address" : "default"}
                     />
 
                     <Text style={styles.label}>Password</Text>
@@ -112,7 +127,7 @@ export default function LoginScreen() {
                         )}
                     </TouchableOpacity>
 
-                    {isBiometricSupported && (
+                    {isBiometricSupported && loginMode === 'email' && (
                         <TouchableOpacity style={styles.bioButton} onPress={handleBiometricAuth}>
                             <Fingerprint size={28} color="#22c55e" />
                             <Text style={styles.bioText}>Tap to Unlock</Text>
@@ -136,7 +151,7 @@ const styles = StyleSheet.create({
         padding: 24,
     },
     header: {
-        marginBottom: 40,
+        marginBottom: 30,
         alignItems: 'center',
     },
     title: {
@@ -148,6 +163,33 @@ const styles = StyleSheet.create({
     subtitle: {
         fontSize: 16,
         color: '#888',
+    },
+    toggleContainer: {
+        flexDirection: 'row',
+        backgroundColor: '#1a1a1a',
+        padding: 4,
+        borderRadius: 12,
+        marginBottom: 30,
+        borderWidth: 1,
+        borderColor: '#333',
+    },
+    toggleButton: {
+        flex: 1,
+        paddingVertical: 10,
+        alignItems: 'center',
+        borderRadius: 8,
+    },
+    toggleActive: {
+        backgroundColor: '#333',
+    },
+    toggleText: {
+        color: '#666',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 1,
+    },
+    toggleTextActive: {
+        color: '#fff',
     },
     form: {
         width: '100%',
@@ -174,7 +216,7 @@ const styles = StyleSheet.create({
         padding: 16,
         borderRadius: 12,
         alignItems: 'center',
-        marginTop: 20,
+        marginTop: 10,
     },
     bioButton: {
         marginTop: 30,

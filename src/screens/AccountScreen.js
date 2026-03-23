@@ -301,7 +301,7 @@ export default function AccountScreen({ navigation }) {
                         <TouchableOpacity
                             styles={[styles.accountCard, styles.selectedCard]}
                             style={[styles.accountCard, styles.selectedCard]}
-                            onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+                            onPress={() => !user?.isChallenge && setIsDropdownOpen(!isDropdownOpen)}
                         >
                             <View style={styles.accountInfo}>
                                 {selectedAccount ? (
